@@ -30,6 +30,7 @@ PATHS = dirstruct(
 with open(PATHS.TOKEN_FILE) as f:
     TOKEN = f.readline()
 
+WELCOME_TO_CHANGE = 'Hi! So you want to change something about the responses?'
 CHANGE_NOTIF_RESPONSE = 'Che cosa vuoi cambiare?'
 ADD_NOTIFICATION_RESPONSE = 'Per quale notifica vuoi aggiungere una frase?'
 SHOW_NOTIFICATION_RESPONSE = 'Per che evento vuoi vedere le notifiche?'
@@ -47,6 +48,7 @@ RING = 'ring_notifications'
 OPEN = 'open_notifications'
 IGNORE = 'ignore'
 
+CONFIRM = 'confirm'
 ADD = 'addResponse'
 REMOVE = 'removeResponse'
 SHOW = 'showAllResponses'
@@ -70,6 +72,7 @@ action_to_names = {
 }
 
 # states in conversation handler
+ZERO = '0'
 FIRST = '1'
 SECOND = '2'
 THIRD = '3'
@@ -87,12 +90,23 @@ PAGE = 'page'
 INDEX_TO_RESPONSE = 'indexToResponse'
 RESPONSE_TO_INDEX = 'responseToIndex'
 MAX_RESPONSE_SENT = 'maxResponseSent'
+LAST_KNOWN_STATE = 'lastKnownState'
 
 
 def print_log(message):
     print(message)
     with open(PATHS.LOG_FILE, 'a+') as f:
         f.write(str(message) + '\n')
+
+
+def save_state_factory(state):
+    def save_state_wrap(func):
+        def inner(self, update, context):
+            context.user_data[LAST_KNOWN_STATE] = state
+            print_log(f"saving last state {state}")
+            return func(self, update, context)
+        return inner
+    return save_state_wrap
 
 
 class BotHandler:
@@ -140,8 +154,11 @@ class BotHandler:
         self.updater.dispatcher.add_handler(
             ConversationHandler(
                 entry_points=[CommandHandler(
-                    'change_responses', self.change_response)],
+                    'change_responses', self.enter_change_convo)],
                 states={
+                    ZERO: [
+                        CallbackQueryHandler(
+                            self.change_response, pattern='^' + CONFIRM + '$')],
                     FIRST: [
                         CallbackQueryHandler(
                             self.ask_where_add, pattern='^' + ADD + '$'),
@@ -169,16 +186,17 @@ class BotHandler:
                     FIFTH: [
                         CallbackQueryHandler(
                             self.pick_remove_notif, pattern='^' + f"{NEXT}|{PREV}" + '$'),
-                        CallbackQueryHandler(
-                            self.abort_conversation, pattern='^' + QUIT + '$'),
                         MessageHandler(
                             Filters.text & Filters.reply, self.remove_selected_notif)
                     ]
                 },
-                fallbacks=[CommandHandler(
-                    'abort', self.abort_conversation)],
+                fallbacks=[CallbackQueryHandler(
+                    self.abort_conversation),  # pattern='^' + QUIT + '$') omitted, as
+                    # any other uncollected query should be collected too
+                    CommandHandler(
+                    'abort', self.abort_conversation),
+                    MessageHandler(None, self.unclear_input)],
                 per_message=False
-
             )
         )
         self.updater.dispatcher.add_handler(
@@ -194,7 +212,19 @@ class BotHandler:
 
         self.alwaysupdate = alwaysupdate
 
+    def enter_change_convo(self, update, context):
+        print_log("\tEntering change response dialog...")
+        self.updater.bot.send_message(
+            update.effective_chat.id, WELCOME_TO_CHANGE, reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton('Yes, I do', callback_data=CONFIRM),
+                  InlineKeyboardButton("Nope, I don't", callback_data=QUIT)]]
+            )
+        )
+        return ZERO
+
+    @save_state_factory(ZERO)
     def change_response(self, update, context):
+        self.clean_query_remove_markup(update.callback_query)
         print_log(datetime.datetime.now())
         print_log("\tReceived request to change response")
 
@@ -221,6 +251,7 @@ class BotHandler:
             print_log("\tDid not close yet.. aborting")
             update.message.reply_text(self.selectOpen())
 
+    @save_state_factory(FIRST)
     def ask_where_add(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         print_log(datetime.datetime.now())
@@ -234,6 +265,7 @@ class BotHandler:
             ))
         return SECOND
 
+    @save_state_factory(FIRST)
     def ask_where_remove(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         print_log(datetime.datetime.now())
@@ -247,6 +279,7 @@ class BotHandler:
             ))
         return SECOND
 
+    @save_state_factory(FIRST)
     def ask_where_show(self, update, context):
         print_log("\tReceived request to show responses. For what?")
         self.clean_query_remove_markup(update.callback_query)
@@ -407,6 +440,7 @@ class BotHandler:
         else:
             return RING_PREFIX + RING_NOTIFICATION_FALLBACK
 
+    @save_state_factory(SECOND)
     def ask_new_notif(self, update, context):
         print_log(datetime.datetime.now())
         self.clean_query_remove_markup(update.callback_query)
@@ -420,6 +454,7 @@ class BotHandler:
                                       "prefix just to make sure it's easy to understand quickly what you're saying")
         return THIRD
 
+    @save_state_factory(SECOND)
     def ask_remove_notif(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         print_log("\tReceived request to remove response.")
@@ -432,19 +467,21 @@ class BotHandler:
         # TODO: fuck
         return FOURTH
 
+    @save_state_factory(SECOND)
     def show_list(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         if update.callback_query.data == SHOW_OPEN:
-            context.user_data['location'] = OPEN
+            context.user_data[LOCATION] = OPEN
         else:
-            context.user_data['location'] = RING
+            context.user_data[LOCATION] = RING
 
         self.index_responses(context)
         self.pick_remove_notif(update, context)
 
+    @save_state_factory(THIRD)
     def add_notif(self, update, context):
         if update.message.reply_to_message.from_user.id == self.updater.bot.id:
-            requested_action = context.user_data['action']
+            requested_action = context.user_data[ACTION]
             self.responses[action_to_names[requested_action]].append(
                 update.message.text)
             update.message.reply_text(f"Your notification has been added!")
@@ -457,6 +494,7 @@ class BotHandler:
             print_log("FUCKFUCK")
             return THIRD
 
+    @save_state_factory(FOURTH)
     def remove_notif(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         print_log(
@@ -471,10 +509,14 @@ class BotHandler:
         self.index_responses(context)
         self.pick_remove_notif(update, context)
 
+    @save_state_factory(FIFTH)
     def pick_remove_notif(self, update, context):
         print_log("\tAsking user to select option...")
+        if update.callback_query.data == QUIT:
+            print_log("\tAborted due to user input.")
+            return ConversationHandler.END
         # TODO: switch to KeyboardMarkup at leaaast
-        if update.callback_query.data == NEXT:
+        elif update.callback_query.data == NEXT:
             # only change page if there are more entries to show
             if context.user_data[PAGE] * PAGE_SIZE < len(context.user_data[INDEX_TO_RESPONSE]):
                 context.user_data[PAGE] += 1
@@ -501,6 +543,7 @@ class BotHandler:
                                            [InlineKeyboardButton(QUIT, callback_data=QUIT)]]))
         return FIFTH
 
+    @save_state_factory(FIFTH)
     def remove_selected_notif(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         if context.user_data[ACTION] != REMOVE:
@@ -536,14 +579,18 @@ class BotHandler:
             print_log("\t\tSaved!")
 
     def clean_query_remove_markup(self, query):
-        query.answer()
-        query.edit_message_text(
-            text="Selected option: {}".format(query.data))
+        if (query != None):
+            query.answer()
+            query.edit_message_text(
+                text="Selected option: {}".format(query.data))
 
+    @save_state_factory(ZERO)
     def abort_conversation(self, update, context):
+        self.clean_query_remove_markup(update.callback_query)
         print_log(datetime.datetime.now())
         print_log("Aborted conversation")
-        update.message.reply_text("Sorry about the misunderstanding.")
+        self.updater.bot.send_message(
+            update.effective_chat.id, "Sorry about the misunderstanding.")
         return ConversationHandler.END
 
     def index_responses(self, context):
@@ -556,6 +603,11 @@ class BotHandler:
         context.user_data[RESPONSE_TO_INDEX] = {
             v: k for k, v in context.user_data[INDEX_TO_RESPONSE].items()
         }
+
+    def unclear_input(self, udpate, context):
+        print_log(
+            f"\tReceived unclear input, going back to last know state {context.user_data[LAST_KNOWN_STATE]}")
+        return context.user_data[LAST_KNOWN_STATE]
 
 
 class stupid():
