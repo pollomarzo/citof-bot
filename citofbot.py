@@ -33,6 +33,7 @@ with open(PATHS.TOKEN_FILE) as f:
 WELCOME_TO_CHANGE = 'Hi! So you want to change something about the responses?'
 CHANGE_NOTIF_RESPONSE = 'Che cosa vuoi cambiare?'
 ADD_NOTIFICATION_RESPONSE = 'Per quale notifica vuoi aggiungere una frase?'
+REMOVE_NOTIFICATION_RESPONSE = 'Per che evento vuoi eliminare una notifica?'
 SHOW_NOTIFICATION_RESPONSE = 'Per che evento vuoi vedere le notifiche?'
 RING_PREFIX = '[cancello]'
 RING_NOTIFICATION_FALLBACK = "SOMEONE'S AT THE DOOR! IS IT THE COPS? GO CHECK!"
@@ -170,8 +171,6 @@ class BotHandler:
                         CallbackQueryHandler(
                             self.ask_new_notif, pattern='^' + f"{ADD_RING}|{ADD_OPEN}" + '$'),
                         CallbackQueryHandler(
-                            self.ask_remove_notif, pattern='^' + f"{DELETE_RING}|{DELETE_OPEN}" + '$'),
-                        CallbackQueryHandler(
                             self.show_list, pattern='^' + f"{SHOW_OPEN}|{SHOW_RING}" + '$')],
                     THIRD: [
                         MessageHandler(
@@ -187,7 +186,7 @@ class BotHandler:
                         CallbackQueryHandler(
                             self.pick_remove_notif, pattern='^' + f"{NEXT}|{PREV}" + '$'),
                         MessageHandler(
-                            Filters.text & Filters.reply, self.remove_selected_notif)
+                            None, self.remove_selected_notif)
                     ]
                 },
                 fallbacks=[CallbackQueryHandler(
@@ -268,16 +267,15 @@ class BotHandler:
     @save_state_factory(FIRST)
     def ask_where_remove(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
-        print_log(datetime.datetime.now())
-        print_log("\tReceived request to remove response")
+        print_log("\tReceived request to remove response.")
         context.user_data['action'] = REMOVE
 
-        self.updater.bot.send_message(
-            update.effective_chat.id, ADD_NOTIFICATION_RESPONSE, reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton('Suona il cancello', callback_data=DELETE_RING),
-                  InlineKeyboardButton('Dare il tiro', callback_data=DELETE_OPEN)]]
-            ))
-        return SECOND
+        self.updater.bot.send_message(update.effective_chat.id,
+                                      REMOVE_NOTIFICATION_RESPONSE, reply_markup=InlineKeyboardMarkup(
+                                          [[InlineKeyboardButton('Ring Notification', callback_data=DELETE_RING),
+                                            InlineKeyboardButton('Open Notification', callback_data=DELETE_OPEN)],
+                                              [InlineKeyboardButton('I changed my mind', callback_data=GO_BACK)]]))
+        return FOURTH
 
     @save_state_factory(FIRST)
     def ask_where_show(self, update, context):
@@ -455,19 +453,6 @@ class BotHandler:
         return THIRD
 
     @save_state_factory(SECOND)
-    def ask_remove_notif(self, update, context):
-        self.clean_query_remove_markup(update.callback_query)
-        print_log("\tReceived request to remove response.")
-
-        self.updater.bot.send_message(update.effective_chat.id,
-                                      "Ok! Which type?", reply_markup=InlineKeyboardMarkup(
-                                          [[InlineKeyboardButton('Ring Notification', callback_data=DELETE_OPEN),
-                                            InlineKeyboardButton('Open Notification', callback_data=DELETE_RING)],
-                                              [InlineKeyboardButton('I changed my mind', callback_data=GO_BACK)]]))
-        # TODO: fuck
-        return FOURTH
-
-    @save_state_factory(SECOND)
     def show_list(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         if update.callback_query.data == SHOW_OPEN:
@@ -476,7 +461,7 @@ class BotHandler:
             context.user_data[LOCATION] = RING
 
         self.index_responses(context)
-        self.pick_remove_notif(update, context)
+        return self.pick_remove_notif(update, context)
 
     @save_state_factory(THIRD)
     def add_notif(self, update, context):
@@ -498,16 +483,17 @@ class BotHandler:
     def remove_notif(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         print_log(
-            f"\tReceived request to remove response from {update.callback_query}. Presenting choices...")
+            f"\tReceived request to remove response from {update.callback_query.data}. Presenting choices...")
+        context.user_data[PAGE] = 0
         if update.callback_query.data == DELETE_OPEN:
-            context.user_data['location'] = OPEN
+            context.user_data[LOCATION] = OPEN
         else:
-            context.user_data['location'] = RING
+            context.user_data[LOCATION] = RING
         self.updater.bot.send_message(update.effective_chat.id, "Please answer to the next message the"
                                       "number of the entry you would like to delete")
 
         self.index_responses(context)
-        self.pick_remove_notif(update, context)
+        return self.pick_remove_notif(update, context)
 
     @save_state_factory(FIFTH)
     def pick_remove_notif(self, update, context):
@@ -556,18 +542,27 @@ class BotHandler:
             print_log(
                 f"\tReceived request to remove entry {update.message.text}")
             if str.isdigit(update.message.text):
+                requested_number = int(update.message.text)
+                if requested_number < 0 or requested_number not in context.user_data[INDEX_TO_RESPONSE].keys():
+                    self.updater.bot.send_message(update.effective_chat.id,
+                                                  "Right, very funny. How about a real number next time?\njerk")
+                    return self.change_response(update, context)
                 removed_response = context.user_data[INDEX_TO_RESPONSE].pop(
-                    int(update.message.text))
+                    requested_number)
                 # i'm curious what they'll try
                 with open(PATHS.DEL_FILE, 'a+') as f:
                     f.write(f"{str(removed_response)}\n")
 
-                self.responses[LOCATION].remove(removed_response)
+                self.responses[context.user_data[LOCATION]].remove(
+                    removed_response)
                 print_log(f"\tRemoved {removed_response}")
                 self.update_file(PATHS.RESPONSE_FILE, self.responses)
 
                 update.message.reply_text(
                     "I removed what you asked. Hope it wasn't offensive!\nBye!")
+            else:
+                print_log("\tCouldn't understand answer")
+                self.unclear_input(update, context)
 
             return ConversationHandler.END
 
@@ -604,9 +599,9 @@ class BotHandler:
             v: k for k, v in context.user_data[INDEX_TO_RESPONSE].items()
         }
 
-    def unclear_input(self, udpate, context):
+    def unclear_input(self, update, context):
         print_log(
-            f"\tReceived unclear input, going back to last know state {context.user_data[LAST_KNOWN_STATE]}")
+            f"\tReceived unclear input {update.message.text}, going back to last know state {context.user_data[LAST_KNOWN_STATE]}")
         return context.user_data[LAST_KNOWN_STATE]
 
 
