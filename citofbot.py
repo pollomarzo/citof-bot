@@ -155,9 +155,6 @@ class BotHandler:
             CommandHandler('reload', self.reload_settings))
         self.updater.dispatcher.add_handler(
             CommandHandler('pingall', self.ping_all))
-        self.updater.dispatcher.add_handler(
-            CommandHandler('open_gate', self.open_gate)
-        )
 
         self.updater.dispatcher.add_handler(
             ConversationHandler(
@@ -182,7 +179,7 @@ class BotHandler:
                     THIRD: [
                         MessageHandler(
                             Filters.text & Filters.reply, self.add_notif),
-                        MessageHandler(Filters.text, self.warn_about_answer)
+                        MessageHandler(Filters.all, self.warn_about_answer)
                     ],
                     FOURTH: [
                         CallbackQueryHandler(
@@ -194,7 +191,7 @@ class BotHandler:
                         CallbackQueryHandler(
                             self.pick_remove_notif, pattern='^' + f"{NEXT}|{PREV}" + '$'),
                         MessageHandler(
-                            None, self.remove_selected_notif)
+                            Filters.text, self.remove_selected_notif)
                     ]
                 },
                 fallbacks=[CallbackQueryHandler(
@@ -210,6 +207,8 @@ class BotHandler:
             MessageHandler(Filters.status_update.new_chat_members, self.addfromnewmember))
         self.updater.dispatcher.add_handler(
             MessageHandler(Filters.status_update.left_chat_member, self.exitleftchat))
+        self.updater.dispatcher.add_handler(
+            CommandHandler('open_gate', self.open_gate))
         self.updater.dispatcher.add_handler(
             CallbackQueryHandler(self.process_response)
         )
@@ -399,12 +398,14 @@ class BotHandler:
         update.message.reply_text("did you get pinged?")
 
     def addfromnewmember(self, update, context):
+        print("in addfromnewmember")
         if self.updater.bot.id in [member.id for member in update.message.new_chat_members]:
             print_log("Just got added to a chat")
             self.add_to_conf(update, context)
             print_log("Done!")
 
     def exitleftchat(self, update, context):
+        print("in exitleftchat")
         if update.message.left_chat_member.id == self.updater.bot.id:
             print_log("Received removal update")
 
@@ -572,6 +573,7 @@ class BotHandler:
     @save_state_factory(FIFTH)
     def remove_selected_notif(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
+        print_log("in remove_selected_notif")
         answered_message = update.message.reply_to_message
         if context.user_data[ACTION] != REMOVE:
             # we got in here "by mistake": we misinterpreted
