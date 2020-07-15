@@ -10,9 +10,9 @@ from gpiozero import LED
 import random
 import os
 from collections import namedtuple
-import logging
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# import logging
+# logging.basicConfig(level=logging.DEBUG,
+#                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 PIN_OPEN = 4
 PIN_RING = 1
@@ -249,10 +249,10 @@ class BotHandler:
     def open_gate(self, update, context):
         print_log(datetime.datetime.now())
         print_log("\tReceived open request... Opening gate")
-        if self.lastopen + TIME_AVOID_OPEN > time.time():
-            self.open_dev.on
-            time.sleep(0.2)
-            self.open_dev.off
+        if self.lastopen + TIME_AVOID_OPEN < time.time():
+            self.open_dev.on()
+            time.sleep(0.001)
+            self.open_dev.off()
             print_log("\tSent out signal. Is it open?")
             update.message.reply_text(self.selectOpen())
         else:
@@ -388,9 +388,10 @@ class BotHandler:
             print_log("\tSENDINGNOTIFICATION!!")
             for chat in enabled.keys():
                 # send message and save to pending_alerts
-                self.pending_alerts.append(self.updater.bot.send_message(
+                final_message = self.updater.bot.send_message(
                     chat, message, reply_markup=InlineKeyboardMarkup(
-                        self.reply_to_ring)))
+                        self.reply_to_ring))
+                self.pending_alerts.append(final_message)
             self.lastring = time.time()
         else:
             print_log("\tToo little time since last notification")
@@ -658,8 +659,12 @@ class stupid():
     def __init__(self):
         self.when_pressed = None
 
+    def on(self):
+        print("I'm getting turned on...")
+
 
 if __name__ == '__main__':
-    handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
-    # handler = BotHandler(stupid(), stupid())
+    # handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
+    handler = BotHandler(stupid(), stupid())
+    handler.send_to_enabled("TESTING")
     handler.relax()
