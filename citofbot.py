@@ -10,9 +10,12 @@ from gpiozero import LED
 import random
 import os
 from collections import namedtuple
+import logging
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-PIN_OPEN = 1
-PIN_RING = 2
+PIN_OPEN = 4
+PIN_RING = 1
 # will call this pin even though the second one is gpio
 
 CURRENT_DIR = os.path.dirname(__file__)
@@ -177,8 +180,7 @@ class BotHandler:
                         CallbackQueryHandler(
                             self.show_list, pattern='^' + f"{SHOW_OPEN}|{SHOW_RING}" + '$')],
                     THIRD: [
-                        MessageHandler(
-                            Filters.text & Filters.reply, self.add_notif),
+                        # MessageHandler(Filters.reply, self.add_notif),
                         MessageHandler(Filters.all, self.warn_about_answer)
                     ],
                     FOURTH: [
@@ -199,7 +201,7 @@ class BotHandler:
                     # any other uncollected query should be collected too
                     CommandHandler(
                     'abort', self.abort_conversation),
-                    MessageHandler(Filters.text, self.unclear_input)],
+                    MessageHandler(Filters.update, self.unclear_input)],
                 per_message=False
             )
         )
@@ -658,6 +660,6 @@ class stupid():
 
 
 if __name__ == '__main__':
-    # handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
-    handler = BotHandler(stupid(), stupid())
+    handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
+    # handler = BotHandler(stupid(), stupid())
     handler.relax()
