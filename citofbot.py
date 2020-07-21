@@ -664,7 +664,7 @@ class stupid():
 
 
 if __name__ == '__main__':
-    # handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
-    handler = BotHandler(stupid(), stupid())
+    handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
+    # handler = BotHandler(stupid(), stupid())
     handler.send_to_enabled("TESTING")
     handler.relax()
