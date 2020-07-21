@@ -4,5 +4,5 @@
 
 cd /
 cd home/pi/bot/citof
-sudo python main.py
+sudo python citofbot.py
 cd
