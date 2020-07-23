@@ -15,7 +15,7 @@ from collections import namedtuple
 #                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 PIN_OPEN = 4
-PIN_RING = 1
+PIN_RING = 2 
 # will call this pin even though the second one is gpio
 
 CURRENT_DIR = os.path.dirname(__file__)
@@ -48,6 +48,7 @@ WARN_ADD_ANSWER = ("Hey! I'll only say this once. I'll be waiting for a reply, "
 # bad name, time to avoid re-ringing due to multiple signals
 TIME_AVOID_RING = 10
 TIME_AVOID_OPEN = 10
+OPEN_TIME_SLEEP = 0.3
 
 
 # responses for callback
@@ -118,7 +119,7 @@ def save_state_factory(state):
 
 
 class BotHandler:
-    def __init__(self, ring_dev, open_dev, alwaysupdate=True):
+    def __init__(self, open_dev, ring_dev, alwaysupdate=True):
         try:
             f = open(PATHS.CONF_FILE)
             self.conf = json.load(f)
@@ -219,6 +220,137 @@ class BotHandler:
         self.ring_dev.when_pressed = self.send_to_enabled
 
         self.alwaysupdate = alwaysupdate
+    
+    ###################### I/O HANDLERS #############################################################
+
+    def open_gate(self, update, context):
+        print_log(datetime.datetime.now())
+        print_log("\tReceived open request... Opening gate")
+        if self.lastopen + TIME_AVOID_OPEN < time.time():
+            print_log("opening gate...")
+            self.open_dev.on()
+            time.sleep(OPEN_TIME_SLEEP)
+            self.open_dev.off()
+            print_log("\tSent out signal. Is it open?")
+            update.message.reply_text(self.selectOpen())
+        else:
+            print_log("\tDid not close yet.. aborting")
+            update.message.reply_text(self.selectOpen())
+    
+    def send_to_enabled(self, message=None):
+        print_log("\tReceived signal...")
+        # reload configuration file, just to make sure (in case someone
+        # added a new chat and forgot to reload before the doorbell rang)
+        with open(PATHS.CONF_FILE) as f:
+            print_log(datetime.datetime.now())
+            print_log("\t\tReloading conf file...")
+            self.conf = json.load(f)
+            print_log("\t\tReloaded!")
+
+        enabled = {}
+        enabled = {key: value for
+                   (key, value) in self.conf.items() if value[1] == 1}
+        if message == None:
+            message = self.selectRing()
+        if self.lastring + TIME_AVOID_RING < time.time():
+            print_log("\tSENDINGNOTIFICATION!!")
+            for chat in enabled.keys():
+                # send message and save to pending_alerts
+                final_message = self.updater.bot.send_message(
+                    chat, message, reply_markup=InlineKeyboardMarkup(
+                        self.reply_to_ring))
+                self.pending_alerts.append(final_message)
+            self.lastring = time.time()
+        else:
+            print_log("\tToo little time since last notification")
+
+    def process_response(self, update, context):
+        self.clean_query_remove_markup(update.callback_query)
+        query = update.callback_query
+        print_log(datetime.datetime.now())
+        print_log("Received response...")
+        if query.data == OPEN:
+            print_log("Request approved! Opening..")
+            self.open_gate(update, context)
+
+            # ok, the next part is a bit of a hack: because i used send_message
+            # to alert every chat, i don't have an update or a context, but only
+            # the list of messages i sent. at the same time, i want to function
+            # that opens the gate to be a callback functions (have update and
+            # context as parameters), so that it can be called directly with a
+            # command. so, i switch out the message in the original update,
+            # because i know that's the only part open_gate will use
+            for i in self.pending_alerts:
+                update.message = i
+                self.open_gate(update, context)
+        else:
+            print_log("\tRequest ignored")
+
+    ###################### OTHER DIRECT COMMANDS HANDLERS ###########################################
+
+    def add_to_conf(self, update, context):
+        print_log(datetime.datetime.now())
+        print_log("\tAdding new chat..")
+        added = self.addChat(update.effective_chat.id,
+                             update.effective_chat.title)
+        print_log("\tDone!")
+        if self.alwaysupdate and added:
+            self.update_file(PATHS.CONF_FILE, self.conf)
+        if added:
+            update.message.reply_text(
+                "added your chat. it'll have to be verified by a moderator before you're clear!")
+        else:
+            update.message.reply_text(
+                "I already added your chat")
+    
+    def remove_from_conf(self, update, context):
+        print_log(datetime.datetime.now())
+        if self.conf is {}:
+            update.message.reply_text(
+                "i'm not sending updates to anyone right now...")
+            print_log("No keys in dict")
+            return
+        print_log("\tRemoving chat...")
+        removed = self.removeChat(update.effective_chat.id)
+        print_log("\tDone!")
+        if removed:
+            update.message.reply_text(
+                "removed this chat! you'll no longer receive notifications from me")
+        else:
+            update.message.reply_text(
+                "chat not found. are you sure you know what you're doing?")
+    
+    def reload_settings(self, update, context):
+        print_log(datetime.datetime.now())
+        print_log("Received reload request")
+        settings = [self.conf, self.responses]
+        for i, e in enumerate([PATHS.CONF_FILE, PATHS.RESPONSE_FILE]):
+            with open(e) as f:
+                print_log(datetime.datetime.now())
+                print_log("\tReloading conf file...")
+                settings[i] = json.load(f)
+                print_log("\tReloaded!")
+                update.message.reply_text("reloaded configuration file!")
+
+    def ping_all(self, update, context):
+        self.send_to_enabled(message='PING!')
+        update.message.reply_text("did you get pinged?")
+
+    def addfromnewmember(self, update, context):
+        print("in addfromnewmember")
+        if self.updater.bot.id in [member.id for member in update.message.new_chat_members]:
+            print_log("Just got added to a chat")
+            self.add_to_conf(update, context)
+            print_log("Done!")
+    
+    def exitleftchat(self, update, context):
+        print("in exitleftchat")
+        if update.message.left_chat_member.id == self.updater.bot.id:
+            print_log("Received removal update")
+
+            self.remove_from_conf(update, context)
+
+    ####################### CONVERSATION HANDLERS ###################################################
 
     def enter_change_convo(self, update, context):
         print_log("\tEntering change response dialog...")
@@ -229,6 +361,20 @@ class BotHandler:
             )
         )
         return ZERO
+    
+    @save_state_factory(ZERO)
+    def abort_conversation(self, update, context):
+        self.clean_query_remove_markup(update.callback_query)
+        print_log(datetime.datetime.now())
+        print_log("Aborted conversation")
+        self.updater.bot.send_message(
+            update.effective_chat.id, "Sorry about the misunderstanding.")
+        return ConversationHandler.END
+        
+    def unclear_input(self, update, context):
+        print_log(
+            f"\tReceived unclear input {update.message.text}, going back to last know state {context.user_data[LAST_KNOWN_STATE]}")
+        return context.user_data[LAST_KNOWN_STATE]
 
     @save_state_factory(ZERO)
     def change_response(self, update, context):
@@ -245,19 +391,6 @@ class BotHandler:
         )
         # Tell ConversationHandler that we're in state `FIRST` now
         return FIRST
-
-    def open_gate(self, update, context):
-        print_log(datetime.datetime.now())
-        print_log("\tReceived open request... Opening gate")
-        if self.lastopen + TIME_AVOID_OPEN < time.time():
-            self.open_dev.on()
-            time.sleep(0.001)
-            self.open_dev.off()
-            print_log("\tSent out signal. Is it open?")
-            update.message.reply_text(self.selectOpen())
-        else:
-            print_log("\tDid not close yet.. aborting")
-            update.message.reply_text(self.selectOpen())
 
     @save_state_factory(FIRST)
     def ask_where_add(self, update, context):
@@ -298,158 +431,7 @@ class BotHandler:
                   InlineKeyboardButton('Dare il tiro', callback_data=SHOW_OPEN)]]
             ))
         return SECOND
-
-    def add_to_conf(self, update, context):
-        print_log(datetime.datetime.now())
-        print_log("\tAdding new chat..")
-        added = self.addChat(update.effective_chat.id,
-                             update.effective_chat.title)
-        print_log("\tDone!")
-        if self.alwaysupdate and added:
-            self.update_file(PATHS.CONF_FILE, self.conf)
-        if added:
-            update.message.reply_text(
-                "added your chat. it'll have to be verified by a moderator before you're clear!")
-        else:
-            update.message.reply_text(
-                "I already added your chat")
-
-    def remove_from_conf(self, update, context):
-        print_log(datetime.datetime.now())
-        if self.conf is {}:
-            update.message.reply_text(
-                "i'm not sending updates to anyone right now...")
-            print_log("No keys in dict")
-            return
-        print_log("\tRemoving chat...")
-        removed = self.removeChat(update.effective_chat.id)
-        print_log("\tDone!")
-        if removed:
-            update.message.reply_text(
-                "removed this chat! you'll no longer receive notifications from me")
-        else:
-            update.message.reply_text(
-                "chat not found. are you sure you know what you're doing?")
-
-    def reload_settings(self, update, context):
-        print_log(datetime.datetime.now())
-        print_log("Received reload request")
-        settings = [self.conf, self.responses]
-        for i, e in enumerate([PATHS.CONF_FILE, PATHS.RESPONSE_FILE]):
-            with open(e) as f:
-                print_log(datetime.datetime.now())
-                print_log("\tReloading conf file...")
-                settings[i] = json.load(f)
-                print_log("\tReloaded!")
-                update.message.reply_text("reloaded configuration file!")
-
-    def relax(self):
-        self.updater.start_polling()  # not sure if necessary
-        self.updater.idle()
-
-    def process_response(self, update, context):
-        self.clean_query_remove_markup(update.callback_query)
-        query = update.callback_query
-        print_log(datetime.datetime.now())
-        print_log("Received response...")
-        if query.data == OPEN:
-            print_log("Request approved! Opening..")
-            self.open_gate(update, context)
-
-            # ok, the next part is a bit of a hack: because i used send_message
-            # to alert every chat, i don't have an update or a context, but only
-            # the list of messages i sent. at the same time, i want to function
-            # that opens the gate to be a callback functions (have update and
-            # context as parameters), so that it can be called directly with a
-            # command. so, i switch out the message in the original update,
-            # because i know that's the only part open_gate will use
-            for i in self.pending_alerts:
-                update.message = i
-                self.open_gate(update, context)
-        else:
-            print_log("\tRequest ignored")
-
-    def send_to_enabled(self, message=None):
-        print_log("\tReceived signal...")
-        # reload configuration file, just to make sure (in case someone
-        # added a new chat and forgot to reload before the doorbell rang)
-        with open(PATHS.CONF_FILE) as f:
-            print_log(datetime.datetime.now())
-            print_log("\t\tReloading conf file...")
-            self.conf = json.load(f)
-            print_log("\t\tReloaded!")
-
-        enabled = {}
-        enabled = {key: value for
-                   (key, value) in self.conf.items() if value[1] == 1}
-        if message == None:
-            message = self.selectRing()
-        if self.lastring + TIME_AVOID_RING < time.time():
-            print_log("\tSENDINGNOTIFICATION!!")
-            for chat in enabled.keys():
-                # send message and save to pending_alerts
-                final_message = self.updater.bot.send_message(
-                    chat, message, reply_markup=InlineKeyboardMarkup(
-                        self.reply_to_ring))
-                self.pending_alerts.append(final_message)
-            self.lastring = time.time()
-        else:
-            print_log("\tToo little time since last notification")
-
-    def ping_all(self, update, context):
-        self.send_to_enabled(message='PING!')
-        update.message.reply_text("did you get pinged?")
-
-    def addfromnewmember(self, update, context):
-        print("in addfromnewmember")
-        if self.updater.bot.id in [member.id for member in update.message.new_chat_members]:
-            print_log("Just got added to a chat")
-            self.add_to_conf(update, context)
-            print_log("Done!")
-
-    def exitleftchat(self, update, context):
-        print("in exitleftchat")
-        if update.message.left_chat_member.id == self.updater.bot.id:
-            print_log("Received removal update")
-
-            self.remove_from_conf(update, context)
-
-    ####################### UTILS #############################################
-
-    def addChat(self, chat_id, chat_name):
-        added = False
-        if chat_id not in self.conf.keys():
-            self.conf[chat_id] = (chat_name, 0)
-            added = True
-            print_log("\t\tAdded new chat to conf")
-        else:
-            print_log("\t\tThe chat was already in conf")
-        return added
-
-    def removeChat(self, chat_id):
-        removed = False
-        if chat_id in self.conf.keys():
-            self.conf.pop(chat_id, None)
-            removed = True
-        if removed and self.alwaysupdate:
-            self.update_file(PATHS.CONF_FILE, self.conf)
-
-        return removed
-
-    def selectOpen(self):
-        choice = random.choice(self.responses[OPEN])
-        if choice != None:
-            return OPEN_PREFIX + random.choice(self.responses[OPEN])
-        else:
-            return OPEN_PREFIX + OPEN_NOTIFICATION_FALLBACK
-
-    def selectRing(self):
-        choice = random.choice(self.responses[RING])
-        if choice != None:
-            return RING_PREFIX + random.choice(self.responses[RING])
-        else:
-            return RING_PREFIX + RING_NOTIFICATION_FALLBACK
-
+    
     @save_state_factory(SECOND)
     def ask_new_notif(self, update, context):
         print_log(datetime.datetime.now())
@@ -616,6 +598,47 @@ class BotHandler:
 
             return ConversationHandler.END
 
+    ####################### UTILS #############################################
+
+    def relax(self):
+        self.updater.start_polling()  # not sure if necessary
+        self.updater.idle()
+
+    def addChat(self, chat_id, chat_name):
+        added = False
+        if chat_id not in self.conf.keys():
+            self.conf[chat_id] = (chat_name, 0)
+            added = True
+            print_log("\t\tAdded new chat to conf")
+        else:
+            print_log("\t\tThe chat was already in conf")
+        return added
+
+    def removeChat(self, chat_id):
+        removed = False
+        if chat_id in self.conf.keys():
+            self.conf.pop(chat_id, None)
+            removed = True
+        if removed and self.alwaysupdate:
+            self.update_file(PATHS.CONF_FILE, self.conf)
+
+        return removed
+
+    def selectOpen(self):
+        choice = random.choice(self.responses[OPEN])
+        if choice != None:
+            return OPEN_PREFIX + random.choice(self.responses[OPEN])
+        else:
+            return OPEN_PREFIX + OPEN_NOTIFICATION_FALLBACK
+
+    def selectRing(self):
+        choice = random.choice(self.responses[RING])
+        if choice != None:
+            return RING_PREFIX + random.choice(self.responses[RING])
+        else:
+            return RING_PREFIX + RING_NOTIFICATION_FALLBACK
+
+    
     def update_file(self, file, obj):
         with open(file, 'w') as f:
             print_log("\t\tSaving to file..")
@@ -629,15 +652,6 @@ class BotHandler:
             query.edit_message_text(
                 text="Selected option: {}".format(query.data))
 
-    @save_state_factory(ZERO)
-    def abort_conversation(self, update, context):
-        self.clean_query_remove_markup(update.callback_query)
-        print_log(datetime.datetime.now())
-        print_log("Aborted conversation")
-        self.updater.bot.send_message(
-            update.effective_chat.id, "Sorry about the misunderstanding.")
-        return ConversationHandler.END
-
     def index_responses(self, context):
         # i considered the inclusion of a bidirectional dict.
         # then i decided it wasn't worth the effort
@@ -649,22 +663,17 @@ class BotHandler:
             v: k for k, v in context.user_data[INDEX_TO_RESPONSE].items()
         }
 
-    def unclear_input(self, update, context):
-        print_log(
-            f"\tReceived unclear input {update.message.text}, going back to last know state {context.user_data[LAST_KNOWN_STATE]}")
-        return context.user_data[LAST_KNOWN_STATE]
-
-
+"""
 class stupid():
     def __init__(self):
         self.when_pressed = None
 
     def on(self):
         print("I'm getting turned on...")
-
+"""
 
 if __name__ == '__main__':
     handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
     # handler = BotHandler(stupid(), stupid())
-    handler.send_to_enabled("TESTING")
+    handler.send_to_enabled("FIRST TEST NOTIFICATION")
     handler.relax()
