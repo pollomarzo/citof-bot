@@ -10,6 +10,8 @@ from gpiozero import LED
 import random
 import os
 from collections import namedtuple
+from telegram.error import (TelegramError, Unauthorized, BadRequest, 
+                            TimedOut, ChatMigrated, NetworkError)
 # import logging
 # logging.basicConfig(level=logging.DEBUG,
 #                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -181,7 +183,7 @@ class BotHandler:
                         CallbackQueryHandler(
                             self.show_list, pattern='^' + f"{SHOW_OPEN}|{SHOW_RING}" + '$')],
                     THIRD: [
-                        # MessageHandler(Filters.reply, self.add_notif),
+                        MessageHandler(Filters.reply, self.add_notif),
                         MessageHandler(Filters.all, self.warn_about_answer)
                     ],
                     FOURTH: [
@@ -215,11 +217,43 @@ class BotHandler:
         self.updater.dispatcher.add_handler(
             CallbackQueryHandler(self.process_response)
         )
+        self.updater.dispatcher.add_error_handler(self.process_error)
 
         # set notification on signal received
         self.ring_dev.when_pressed = self.send_to_enabled
 
         self.alwaysupdate = alwaysupdate
+
+    
+    def process_error(self, update, context):
+        print_log(datetime.datetime.now())
+        print_log(f"error raised!: {context.error}")
+        try:
+            raise context.error
+        except Unauthorized:
+            # remove update.message.chat_id from conversation list
+            self.remove_from_conf(update,context)
+        except BadRequest:
+            # handle malformed requests - could be different things. no simple solution :/
+            pass
+        except TimedOut:
+            # handle slow connection problems
+            pass
+        except NetworkError:
+            # handle other connection problems. suuuure
+            pass
+        except ChatMigrated as e:
+            print_log("\thandling chat migration,,")
+            old_chat_id = update.effective_chat.id
+            new_chat_id = e.new_chat_id
+            old_chat_name, _ = self.conf[old_chat_id]
+            self.removeChat(old_chat_id)
+            self.conf[new_chat_id] = (old_chat_name, 1)
+            self.update_file(PATHS.CONF_FILE, self.conf)
+            # the chat_id of a group has changed, use e.new_chat_id instead
+        except TelegramError:
+            # handle all other telegram related errors
+            pass
     
     ###################### I/O HANDLERS #############################################################
 
@@ -313,12 +347,13 @@ class BotHandler:
         print_log("\tRemoving chat...")
         removed = self.removeChat(update.effective_chat.id)
         print_log("\tDone!")
-        if removed:
-            update.message.reply_text(
-                "removed this chat! you'll no longer receive notifications from me")
-        else:
-            update.message.reply_text(
-                "chat not found. are you sure you know what you're doing?")
+        if update.message is not None:
+            if removed:
+                update.message.reply_text(
+                    "removed this chat! you'll no longer receive notifications from me")
+            else:
+                update.message.reply_text(
+                    "chat not found. are you sure you know what you're doing?")
     
     def reload_settings(self, update, context):
         print_log(datetime.datetime.now())
@@ -617,7 +652,7 @@ class BotHandler:
     def removeChat(self, chat_id):
         removed = False
         if chat_id in self.conf.keys():
-            self.conf.pop(chat_id, None)
+            self.conf.pop(chat_id)
             removed = True
         if removed and self.alwaysupdate:
             self.update_file(PATHS.CONF_FILE, self.conf)
@@ -663,17 +698,17 @@ class BotHandler:
             v: k for k, v in context.user_data[INDEX_TO_RESPONSE].items()
         }
 
-"""
+
 class stupid():
     def __init__(self):
         self.when_pressed = None
 
     def on(self):
         print("I'm getting turned on...")
-"""
+
 
 if __name__ == '__main__':
-    handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
-    # handler = BotHandler(stupid(), stupid())
+    # handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
+    handler = BotHandler(stupid(), stupid())
     handler.send_to_enabled("FIRST TEST NOTIFICATION")
     handler.relax()
