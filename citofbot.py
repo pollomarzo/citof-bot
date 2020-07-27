@@ -35,6 +35,8 @@ PATHS = dirstruct(
 with open(PATHS.TOKEN_FILE) as f:
     TOKEN = f.readline()
 
+# responses and stuff
+FIRST_RUN = "Yo! Just woke up. Do you need something?"
 WELCOME_TO_CHANGE = 'Hi! So you want to change something about the responses?'
 CHANGE_NOTIF_RESPONSE = 'Che cosa vuoi cambiare?'
 ADD_NOTIFICATION_RESPONSE = 'Per quale notifica vuoi aggiungere una frase?'
@@ -103,6 +105,10 @@ MAX_RESPONSE_SENT = 'maxResponseSent'
 LAST_KNOWN_STATE = 'lastKnownState'
 WARN_RESPONSE = 'warnResponse'
 
+# json fields. might move to pandas dataframe but REALLY not worth the effort
+ENABLED = 'enabled'
+NAME = 'name' 
+
 
 def print_log(message):
     print(message)
@@ -118,6 +124,17 @@ def save_state_factory(state):
             return func(self, update, context)
         return inner
     return save_state_wrap
+
+def check_enabled(func):
+    def inner(self, update, context):
+        src = str(update.effective_chat.id)
+        src_name = update.effective_chat.title or update.effective_chat.username
+        if self.conf[src][ENABLED] == 1:
+            return func(self, update, context)
+        else:
+            print_log(
+                f"received unauthorized request from {src}({src_name})")
+    return inner
 
 
 class BotHandler:
@@ -244,11 +261,11 @@ class BotHandler:
             pass
         except ChatMigrated as e:
             print_log("\thandling chat migration,,")
-            old_chat_id = update.effective_chat.id
-            new_chat_id = e.new_chat_id
-            old_chat_name, _ = self.conf[old_chat_id]
+            old_chat_id = str(update.effective_chat.id)
+            new_chat_id = str(e.new_chat_id)
+            old_chat_name = self.conf[old_chat_id][NAME]
             self.removeChat(old_chat_id)
-            self.conf[new_chat_id] = (old_chat_name, 1)
+            self.conf[new_chat_id] = {NAME:old_chat_name, ENABLED:1}
             self.update_file(PATHS.CONF_FILE, self.conf)
             # the chat_id of a group has changed, use e.new_chat_id instead
         except TelegramError:
@@ -256,7 +273,7 @@ class BotHandler:
             pass
     
     ###################### I/O HANDLERS #############################################################
-
+    @check_enabled
     def open_gate(self, update, context):
         print_log(datetime.datetime.now())
         print_log("\tReceived open request... Opening gate")
@@ -274,8 +291,8 @@ class BotHandler:
             print_log("\tDid not close yet.. aborting")
             answer_message = "It should still be open... relax"            
 
-        self.updater.bot.send_message(update.effective_chat.id,answer_message)
-    
+        self.updater.bot.send_message(update.effective_chat.id,answer_message, disable_notification=True)
+
     def send_to_enabled(self, message=None):
         print_log("\tReceived signal...")
         # reload configuration file, just to make sure (in case someone
@@ -288,7 +305,7 @@ class BotHandler:
 
         enabled = {}
         enabled = {key: value for
-                   (key, value) in self.conf.items() if value[1] == 1}
+                   (key, value) in self.conf.items() if value[ENABLED] == 1}
         if message == None:
             message = self.selectRing()
         if self.lastring + TIME_AVOID_RING < time.time():
@@ -303,6 +320,7 @@ class BotHandler:
         else:
             print_log("\tToo little time since last notification")
 
+    @check_enabled
     def process_response(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         query = update.callback_query
@@ -320,8 +338,9 @@ class BotHandler:
     def add_to_conf(self, update, context):
         print_log(datetime.datetime.now())
         print_log("\tAdding new chat..")
+        name = update.effective_chat.title or update.effective_chat.username
         added = self.addChat(update.effective_chat.id,
-                             update.effective_chat.title)
+                             name)
         print_log("\tDone!")
         if self.alwaysupdate and added:
             self.update_file(PATHS.CONF_FILE, self.conf)
@@ -349,23 +368,30 @@ class BotHandler:
             else:
                 update.message.reply_text(
                     "chat not found. are you sure you know what you're doing?")
-    
+
     def reload_settings(self, update, context):
         print_log(datetime.datetime.now())
         print_log("Received reload request")
-        settings = [self.conf, self.responses]
-        for i, e in enumerate([PATHS.CONF_FILE, PATHS.RESPONSE_FILE]):
-            with open(e) as f:
-                print_log(datetime.datetime.now())
-                print_log("\tReloading conf file...")
-                settings[i] = json.load(f)
-                print_log("\tReloaded!")
-                update.message.reply_text("reloaded configuration file!")
 
+        with open(PATHS.CONF_FILE) as f:
+            print_log(datetime.datetime.now())
+            print_log(f"\tReloading {PATHS.CONF_FILE} file...")
+            self.conf = json.load(f)
+            print_log("\tReloaded!")
+        with open(PATHS.RESPONSE_FILE) as f:
+            print_log(datetime.datetime.now())
+            print_log(f"\tReloading {PATHS.RESPONSE_FILE} file...")
+            self.responses = json.load(f)
+            print_log("\tReloaded!")
+
+        update.message.reply_text(f"reloaded configuration files!")
+
+    @check_enabled
     def ping_all(self, update, context):
         self.send_to_enabled(message='PING!')
         update.message.reply_text("did you get pinged?")
 
+    @check_enabled
     def addfromnewmember(self, update, context):
         print("in addfromnewmember")
         if self.updater.bot.id in [member.id for member in update.message.new_chat_members]:
@@ -373,6 +399,7 @@ class BotHandler:
             self.add_to_conf(update, context)
             print_log("Done!")
     
+    @check_enabled
     def exitleftchat(self, update, context):
         print("in exitleftchat")
         if update.message.left_chat_member.id == self.updater.bot.id:
@@ -382,30 +409,34 @@ class BotHandler:
 
     ####################### CONVERSATION HANDLERS ###################################################
 
+    @check_enabled
     def enter_change_convo(self, update, context):
         print_log("\tEntering change response dialog...")
         self.updater.bot.send_message(
-            update.effective_chat.id, WELCOME_TO_CHANGE, reply_markup=InlineKeyboardMarkup(
+            update.effective_chat.id, WELCOME_TO_CHANGE, disable_notification=True, reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton('Yes, I do', callback_data=CONFIRM),
                   InlineKeyboardButton("Nope, I don't", callback_data=QUIT)]]
             )
         )
         return ZERO
     
+    @check_enabled
     @save_state_factory(ZERO)
     def abort_conversation(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
         print_log(datetime.datetime.now())
         print_log("Aborted conversation")
         self.updater.bot.send_message(
-            update.effective_chat.id, "Sorry about the misunderstanding.")
+            update.effective_chat.id, "Sorry about the misunderstanding.", disable_notification=True)
         return ConversationHandler.END
-        
+    
+    @check_enabled
     def unclear_input(self, update, context):
         print_log(
             f"\tReceived unclear input {update.message.text}, going back to last know state {context.user_data[LAST_KNOWN_STATE]}")
         return context.user_data[LAST_KNOWN_STATE]
 
+    @check_enabled
     @save_state_factory(ZERO)
     def change_response(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
@@ -413,7 +444,7 @@ class BotHandler:
         print_log("\tReceived request to change response")
 
         self.updater.bot.send_message(
-            update.effective_chat.id, CHANGE_NOTIF_RESPONSE, reply_markup=InlineKeyboardMarkup(
+            update.effective_chat.id, CHANGE_NOTIF_RESPONSE, disable_notification=True, reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton('Aggiungi una risposta', callback_data=ADD),
                   InlineKeyboardButton('Rimuovi una risposta', callback_data=REMOVE)],
                  [InlineKeyboardButton('Mostra tutte le risposte', callback_data=SHOW)]]
@@ -422,6 +453,7 @@ class BotHandler:
         # Tell ConversationHandler that we're in state `FIRST` now
         return FIRST
 
+    @check_enabled
     @save_state_factory(FIRST)
     def ask_where_add(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
@@ -430,12 +462,13 @@ class BotHandler:
         context.user_data['action'] = ADD
 
         self.updater.bot.send_message(
-            update.effective_chat.id, ADD_NOTIFICATION_RESPONSE, reply_markup=InlineKeyboardMarkup(
+            update.effective_chat.id, ADD_NOTIFICATION_RESPONSE, disable_notification=True, reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton('Suona il cancello', callback_data=ADD_RING),
                   InlineKeyboardButton('Dare il tiro', callback_data=ADD_OPEN)]]
             ))
         return SECOND
 
+    @check_enabled
     @save_state_factory(FIRST)
     def ask_where_remove(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
@@ -443,12 +476,13 @@ class BotHandler:
         context.user_data['action'] = REMOVE
 
         self.updater.bot.send_message(update.effective_chat.id,
-                                      REMOVE_NOTIFICATION_RESPONSE, reply_markup=InlineKeyboardMarkup(
+                                      REMOVE_NOTIFICATION_RESPONSE, disable_notification=True, reply_markup=InlineKeyboardMarkup(
                                           [[InlineKeyboardButton('Ring Notification', callback_data=DELETE_RING),
                                             InlineKeyboardButton('Open Notification', callback_data=DELETE_OPEN)],
                                               [InlineKeyboardButton('I changed my mind', callback_data=GO_BACK)]]))
         return FOURTH
 
+    @check_enabled
     @save_state_factory(FIRST)
     def ask_where_show(self, update, context):
         print_log("\tReceived request to show responses. For what?")
@@ -456,12 +490,13 @@ class BotHandler:
         context.user_data['page'] = 0
         context.user_data['action'] = SHOW
         self.updater.bot.send_message(
-            update.effective_chat.id, SHOW_NOTIFICATION_RESPONSE, reply_markup=InlineKeyboardMarkup(
+            update.effective_chat.id, SHOW_NOTIFICATION_RESPONSE, disable_notification=True, reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton('Suona il cancello', callback_data=SHOW_RING),
                   InlineKeyboardButton('Dare il tiro', callback_data=SHOW_OPEN)]]
             ))
         return SECOND
     
+    @check_enabled
     @save_state_factory(SECOND)
     def ask_new_notif(self, update, context):
         print_log(datetime.datetime.now())
@@ -473,13 +508,15 @@ class BotHandler:
         context.user_data[WARN_RESPONSE] = 0
         self.updater.bot.send_message(update.effective_chat.id,
                                       "Ok! *Answer* to this message with your new notification. Be aware, I'll prepend a "
-                                      "prefix just to make sure it's easy to understand quickly what you're saying",
+                                      "prefix just to make sure it's easy to understand quickly what you're saying", 
+                                      disable_notification=True, 
                                       reply_markup=InlineKeyboardMarkup(
                                           [[InlineKeyboardButton(
                                               'Quit', callback_data=QUIT)]])
                                       )
         return THIRD
 
+    @check_enabled
     @save_state_factory(SECOND)
     def show_list(self, update, context):
         # self.clean_query_remove_markup(update.callback_query)
@@ -492,6 +529,7 @@ class BotHandler:
         self.index_responses(context)
         return self.pick_remove_notif(update, context)
 
+    @check_enabled
     @save_state_factory(THIRD)
     def add_notif(self, update, context):
         if update.message.reply_to_message.from_user.id == self.updater.bot.id:
@@ -509,6 +547,7 @@ class BotHandler:
             print_log("\tCaught a response to someone else, will be waiting")
             return THIRD
 
+    @check_enabled
     @save_state_factory(THIRD)
     def warn_about_answer(self, update, context):
         if context.user_data[WARN_RESPONSE] == 0:
@@ -516,7 +555,7 @@ class BotHandler:
             print_log(
                 "\tCaught some random message, warning about reply necessity")
             self.updater.bot.send_message(
-                update.effective_chat.id, WARN_ADD_ANSWER, reply_markup=InlineKeyboardMarkup(
+                update.effective_chat.id, WARN_ADD_ANSWER, disable_notification=True, reply_markup=InlineKeyboardMarkup(
                     [[InlineKeyboardButton(
                         'Quit', callback_data=QUIT)]])
             )
@@ -524,6 +563,7 @@ class BotHandler:
             print_log("\tCaught more random messages, ignoring")
         return THIRD
 
+    @check_enabled
     @save_state_factory(FOURTH)
     def remove_notif(self, update, context):
         # self.clean_query_remove_markup(update.callback_query)
@@ -536,11 +576,12 @@ class BotHandler:
         else:
             context.user_data[LOCATION] = RING
         self.updater.bot.send_message(update.effective_chat.id, "Please answer to the next message the"
-                                      "number of the entry you would like to delete")
+                                      "number of the entry you would like to delete", disable_notification=True)
 
         self.index_responses(context)
         return self.pick_remove_notif(update, context)
 
+    @check_enabled
     @save_state_factory(FIFTH)
     def pick_remove_notif(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
@@ -582,9 +623,10 @@ class BotHandler:
             next_state = FIRST
         print_log(f"OPTIONS SENT: \n{message_text}")
         self.updater.bot.send_message(update.effective_chat.id,
-                                      message_text, reply_markup=keyboard_layout)
+                                      message_text, disable_notification=True, reply_markup=keyboard_layout)
         return next_state
 
+    @check_enabled
     @save_state_factory(FIFTH)
     def remove_selected_notif(self, update, context):
         self.clean_query_remove_markup(update.callback_query)
@@ -607,7 +649,7 @@ class BotHandler:
                 requested_number = int(update.message.text)
                 if requested_number < 0 or requested_number not in context.user_data[INDEX_TO_RESPONSE].keys():
                     self.updater.bot.send_message(update.effective_chat.id,
-                                                  "Right, very funny. How about a real number next time?\njerk")
+                                                  "Right, very funny. How about a real number next time?\njerk", disable_notification=True)
                     return self.change_response(update, context)
                 removed_response = context.user_data[INDEX_TO_RESPONSE].pop(
                     requested_number)
@@ -635,9 +677,10 @@ class BotHandler:
         self.updater.idle()
 
     def addChat(self, chat_id, chat_name):
+        chat_id = str(chat_id)
         added = False
-        if chat_id not in self.conf.keys():
-            self.conf[chat_id] = (chat_name, 0)
+        if chat_id not in self.conf:
+            self.conf[chat_id] = {NAME:chat_name, ENABLED:0}
             added = True
             print_log("\t\tAdded new chat to conf")
         else:
@@ -645,10 +688,14 @@ class BotHandler:
         return added
 
     def removeChat(self, chat_id):
+        chat_id = str(chat_id)
         removed = False
-        if chat_id in self.conf.keys():
+        if chat_id in self.conf:
             self.conf.pop(chat_id)
             removed = True
+            print_log("\t\tRemoved chat")
+        else:
+            print_log("\t\tChat wasn't in conf...")
         if removed and self.alwaysupdate:
             self.update_file(PATHS.CONF_FILE, self.conf)
 
@@ -705,5 +752,5 @@ class stupid():
 if __name__ == '__main__':
     handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
     # handler = BotHandler(stupid(), stupid())
-    handler.send_to_enabled("FIRST TEST NOTIFICATION")
+    handler.send_to_enabled(FIRST_RUN)
     handler.relax()
