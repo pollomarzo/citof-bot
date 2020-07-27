@@ -266,10 +266,15 @@ class BotHandler:
             time.sleep(OPEN_TIME_SLEEP)
             self.open_dev.off()
             print_log("\tSent out signal. Is it open?")
-            update.message.reply_text(self.selectOpen())
+            answer_message = self.selectOpen()
+            for message in self.pending_alerts:
+                self.updater.bot.edit_message_text("Gate was opened", message.chat_id, message.message_id)
+            self.pending_alerts.clear()
         else:
             print_log("\tDid not close yet.. aborting")
-            update.message.reply_text(self.selectOpen())
+            answer_message = "It should still be open... relax"            
+
+        self.updater.bot.send_message(update.effective_chat.id,answer_message)
     
     def send_to_enabled(self, message=None):
         print_log("\tReceived signal...")
@@ -306,17 +311,7 @@ class BotHandler:
         if query.data == OPEN:
             print_log("Request approved! Opening..")
             self.open_gate(update, context)
-
-            # ok, the next part is a bit of a hack: because i used send_message
-            # to alert every chat, i don't have an update or a context, but only
-            # the list of messages i sent. at the same time, i want to function
-            # that opens the gate to be a callback functions (have update and
-            # context as parameters), so that it can be called directly with a
-            # command. so, i switch out the message in the original update,
-            # because i know that's the only part open_gate will use
-            for i in self.pending_alerts:
-                update.message = i
-                self.open_gate(update, context)
+                
         else:
             print_log("\tRequest ignored")
 
@@ -708,7 +703,7 @@ class stupid():
 
 
 if __name__ == '__main__':
-    # handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
-    handler = BotHandler(stupid(), stupid())
+    handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
+    # handler = BotHandler(stupid(), stupid())
     handler.send_to_enabled("FIRST TEST NOTIFICATION")
     handler.relax()
