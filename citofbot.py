@@ -750,7 +750,16 @@ class stupid():
 
 
 if __name__ == '__main__':
-    handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
-    # handler = BotHandler(stupid(), stupid())
-    handler.send_to_enabled(FIRST_RUN)
-    handler.relax()
+    for _ in range(0,MAX_CONN_ATTEMPT):
+        try:
+            handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
+            # handler = BotHandler(stupid(), stupid())
+            handler.send_to_enabled(FIRST_RUN)
+            handler.relax()
+            break
+        except:
+            print("Couldn't connect to Telegram. Retrying in 10 seconds...")
+            time.sleep(10)
+            continue
+        break
+
