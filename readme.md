@@ -1,5 +1,7 @@
 # doorbell bot
 
+citofono = doorbell so citof-bot.
+
 we needed to open the gate at home from our phone. so we made a telegram bot
 
 ## outline
