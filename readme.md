@@ -6,7 +6,7 @@ we needed to open the gate at home from our phone. so we made a telegram bot
 
 ## outline
 
-hardware was designed and completed by [dad](https://github.com/fmarzolo). so i had 2 pins of a raspberry: one was attached to the signal from the doorbell, the other opened it. respectively, they're used as a `Button` and as a `LED` respectively. the bot features plenty of useless features, offering a conversation to add responses
+hardware was designed and completed by [dad](https://github.com/fmarzolo). so i had 2 pins of a raspberry: one was attached to the signal from the doorbell, the other opened it. they're used as a `Button` and as a `LED` respectively. the bot features plenty of useless features, offering a conversation to add responses
 
 ## setup
 
