@@ -10,7 +10,8 @@ hardware was designed and completed by [dad](https://github.com/fmarzolo). so i 
 
 ## setup
 
-create a `token.txt` file with the bot token, in the same directory as the script. then run the script `python3 citofbot.py`. i think it needs su privileges for pins but i'm genuinely not sure. there's a shell script if you like that better
+create a `token.txt` file with the bot token, in the same directory as the script. then run the script `python3 citofbot.py`. i think it needs su privileges for pins. there's a shell script if you like that better.
+then set it up to run on boot. you can use `systemd` service, but i found crontab easier. `sudo crontab -e` -> add line `@reboot <PATH_TO_SCRIPT>/tgbotlauncher.sh > <PATH_TO_LOGS>/logs/citof-bot-log 2>&1` or any sensible variation of it and you're done
 
 ## config
 
