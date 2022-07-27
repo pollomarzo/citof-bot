@@ -10,14 +10,14 @@ from gpiozero import LED
 import random
 import os
 from collections import namedtuple
-from telegram.error import (TelegramError, Unauthorized, BadRequest, 
+from telegram.error import (TelegramError, Unauthorized, BadRequest,
                             TimedOut, ChatMigrated, NetworkError)
 # import logging
 # logging.basicConfig(level=logging.DEBUG,
 #                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 PIN_OPEN = 4
-PIN_RING = 2 
+PIN_RING = 2
 # will call this pin even though the second one is gpio
 
 CURRENT_DIR = os.path.dirname(__file__)
@@ -107,7 +107,7 @@ WARN_RESPONSE = 'warnResponse'
 
 # json fields. might move to pandas dataframe but REALLY not worth the effort
 ENABLED = 'enabled'
-NAME = 'name' 
+NAME = 'name'
 
 
 def print_log(message):
@@ -124,6 +124,7 @@ def save_state_factory(state):
             return func(self, update, context)
         return inner
     return save_state_wrap
+
 
 def check_enabled(func):
     def inner(self, update, context):
@@ -241,7 +242,6 @@ class BotHandler:
 
         self.alwaysupdate = alwaysupdate
 
-    
     def process_error(self, update, context):
         print_log(datetime.datetime.now())
         print_log(f"error raised!: {context.error}")
@@ -249,7 +249,7 @@ class BotHandler:
             raise context.error
         except Unauthorized:
             # remove update.message.chat_id from conversation list
-            self.remove_from_conf(update,context)
+            self.remove_from_conf(update, context)
         except BadRequest:
             # handle malformed requests - could be different things. no simple solution :/
             pass
@@ -265,13 +265,13 @@ class BotHandler:
             new_chat_id = str(e.new_chat_id)
             old_chat_name = self.conf[old_chat_id][NAME]
             self.removeChat(old_chat_id)
-            self.conf[new_chat_id] = {NAME:old_chat_name, ENABLED:1}
+            self.conf[new_chat_id] = {NAME: old_chat_name, ENABLED: 1}
             self.update_file(PATHS.CONF_FILE, self.conf)
             # the chat_id of a group has changed, use e.new_chat_id instead
         except TelegramError:
             # handle all other telegram related errors
             pass
-    
+
     ###################### I/O HANDLERS #############################################################
     @check_enabled
     def open_gate(self, update, context):
@@ -285,13 +285,15 @@ class BotHandler:
             print_log("\tSent out signal. Is it open?")
             answer_message = self.selectOpen()
             for message in self.pending_alerts:
-                self.updater.bot.edit_message_text("Gate was opened", message.chat_id, message.message_id)
+                self.updater.bot.edit_message_text(
+                    "Gate was opened", message.chat_id, message.message_id)
             self.pending_alerts.clear()
         else:
             print_log("\tDid not close yet.. aborting")
-            answer_message = "It should still be open... relax"            
+            answer_message = "It should still be open... relax"
 
-        self.updater.bot.send_message(update.effective_chat.id,answer_message, disable_notification=True)
+        self.updater.bot.send_message(
+            update.effective_chat.id, answer_message, disable_notification=True)
 
     def send_to_enabled(self, message=None):
         print_log("\tReceived signal...")
@@ -329,7 +331,7 @@ class BotHandler:
         if query.data == OPEN:
             print_log("Request approved! Opening..")
             self.open_gate(update, context)
-                
+
         else:
             print_log("\tRequest ignored")
 
@@ -350,7 +352,7 @@ class BotHandler:
         else:
             update.message.reply_text(
                 "I already added your chat")
-    
+
     def remove_from_conf(self, update, context):
         print_log(datetime.datetime.now())
         if self.conf is {}:
@@ -398,7 +400,7 @@ class BotHandler:
             print_log("Just got added to a chat")
             self.add_to_conf(update, context)
             print_log("Done!")
-    
+
     @check_enabled
     def exitleftchat(self, update, context):
         print("in exitleftchat")
@@ -419,7 +421,7 @@ class BotHandler:
             )
         )
         return ZERO
-    
+
     @check_enabled
     @save_state_factory(ZERO)
     def abort_conversation(self, update, context):
@@ -429,7 +431,7 @@ class BotHandler:
         self.updater.bot.send_message(
             update.effective_chat.id, "Sorry about the misunderstanding.", disable_notification=True)
         return ConversationHandler.END
-    
+
     @check_enabled
     def unclear_input(self, update, context):
         print_log(
@@ -495,7 +497,7 @@ class BotHandler:
                   InlineKeyboardButton('Dare il tiro', callback_data=SHOW_OPEN)]]
             ))
         return SECOND
-    
+
     @check_enabled
     @save_state_factory(SECOND)
     def ask_new_notif(self, update, context):
@@ -508,8 +510,8 @@ class BotHandler:
         context.user_data[WARN_RESPONSE] = 0
         self.updater.bot.send_message(update.effective_chat.id,
                                       "Ok! *Answer* to this message with your new notification. Be aware, I'll prepend a "
-                                      "prefix just to make sure it's easy to understand quickly what you're saying", 
-                                      disable_notification=True, 
+                                      "prefix just to make sure it's easy to understand quickly what you're saying",
+                                      disable_notification=True,
                                       reply_markup=InlineKeyboardMarkup(
                                           [[InlineKeyboardButton(
                                               'Quit', callback_data=QUIT)]])
@@ -680,7 +682,7 @@ class BotHandler:
         chat_id = str(chat_id)
         added = False
         if chat_id not in self.conf:
-            self.conf[chat_id] = {NAME:chat_name, ENABLED:0}
+            self.conf[chat_id] = {NAME: chat_name, ENABLED: 0}
             added = True
             print_log("\t\tAdded new chat to conf")
         else:
@@ -715,7 +717,6 @@ class BotHandler:
         else:
             return RING_PREFIX + RING_NOTIFICATION_FALLBACK
 
-    
     def update_file(self, file, obj):
         with open(file, 'w') as f:
             print_log("\t\tSaving to file..")
@@ -741,16 +742,20 @@ class BotHandler:
         }
 
 
-class stupid():
-    def __init__(self):
-        self.when_pressed = None
+# class stupid():
+#     def __init__(self):
+#         self.when_pressed = None
 
-    def on(self):
-        print("I'm getting turned on...")
+#     def on(self):
+#         print("I'm getting turned on...")
 
+
+MAX_CONN_ATTEMPT = 50
 
 if __name__ == '__main__':
-    for _ in range(0,MAX_CONN_ATTEMPT):
+    print("Trying to connect to telegram:")
+    for i in range(0, MAX_CONN_ATTEMPT):
+        print("Attempt n. {i}")
         try:
             handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
             # handler = BotHandler(stupid(), stupid())
@@ -758,8 +763,8 @@ if __name__ == '__main__':
             handler.relax()
             break
         except:
-            print("Couldn't connect to Telegram. Retrying in 10 seconds...")
-            time.sleep(10)
+            print("Couldn't connect to Telegram. Retrying in 20 seconds...")
+            time.sleep(20)
             continue
-        break
-
+    if i == MAX_CONN_ATTEMPT:
+        print("Couldn't connect! {MAX_CONN_ATTEMPT} reached, giving up :(")
