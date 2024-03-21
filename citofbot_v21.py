@@ -1,3 +1,4 @@
+import asyncio
 from telegram.ext import Application, CommandHandler
 import os
 from collections import namedtuple
@@ -33,6 +34,7 @@ class PATHS:
     CONF_FILE = './config.json'
     LOG_FILE = './log.txt'
     DEL_FILE = './trash.txt'
+    RESPONSE_FILE = './responses.json'
 
 
 with open(PATHS.TOKEN_FILE) as f:
@@ -114,10 +116,15 @@ class BotHandler():
         except:
             self.conf = {}
 
-        self.responses = {
-            RING: [DEFAULT_RING_NOTIFICATION],
-            OPEN: [DEFAULT_OPEN_NOTIFICATION]
-        }
+        try:
+            f = open(PATHS.RESPONSE_FILE)
+            self.responses = json.load(f)
+            f.close()
+        except:
+            self.responses = {
+                RING: [DEFAULT_RING_NOTIFICATION],
+                OPEN: [DEFAULT_OPEN_NOTIFICATION]
+            }
 
         print_log("---NEW SESSION---")
         print_log(datetime.datetime.now())
@@ -149,7 +156,8 @@ class BotHandler():
         self.application.add_error_handler(self.process_error)
 
         # set notification on signal received
-        self.ring_dev.when_pressed = self.send_to_enabled
+        self.ring_dev.when_pressed = lambda: self.application.job_queue.run_once(
+            self.send_to_enabled, 0)
 
         self.alwaysupdate = alwaysupdate
 
@@ -248,7 +256,7 @@ class BotHandler():
             print_log("\tSENDINGNOTIFICATION!!")
             for chat in enabled.keys():
                 # send message and save to pending_alerts
-                print(f"alerting chat {chat}, {enabled[chat]['name']}")
+                print(f"\t\talerting chat {chat}, {enabled[chat]['name']}")
                 final_message = await self.application.bot.send_message(
                     chat, message, reply_markup=InlineKeyboardMarkup(
                         self.reply_to_ring))
@@ -326,10 +334,12 @@ class BotHandler():
         await self.send_to_enabled(message='PING!')
         await update.message.reply_text("did you get pinged?")
 
-    def start(self):
+    async def first_message(self, context):
         print_log("Sending start message...")
-        self.send_to_enabled(FIRST_RUN)
+        await self.send_to_enabled(FIRST_RUN)
         print_log("\tSent start message.")
+
+    def start(self):
         self.application.run_polling()
 
     def addChat(self, chat_id, chat_name):
@@ -429,6 +439,7 @@ if __name__ == '__main__':
         print_log(
             f"{datetime.datetime.now()}: attempt n.{attempt} of {MAX_CONN_ATTEMPT}")
         try:
+            handler.application.job_queue.run_once(handler.first_message, 0)
             handler.start()
         except Exception as e:
             print_log(
