@@ -4,5 +4,5 @@
 
 cd /
 cd home/pi/bot/citof-bot
-sudo python citofbot.py
+sudo python citofbot_v21.py
 cd
