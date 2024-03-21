@@ -1,3 +1,4 @@
+import sys
 import asyncio
 from telegram.ext import Application, CommandHandler
 import os
@@ -18,7 +19,7 @@ import telegram
 import traceback
 import html
 
-ENV_PROD = False
+ENV_PROD = True
 
 
 PIN_OPEN = 4
@@ -127,6 +128,7 @@ class BotHandler():
             }
 
         print_log("---NEW SESSION---")
+        self.lock = asyncio.Lock()
         print_log(datetime.datetime.now())
         # all alerts sent but not answered. used when someone answer and
         # everyone else sees the notification disappear
@@ -162,8 +164,7 @@ class BotHandler():
         self.alwaysupdate = alwaysupdate
 
     async def process_error(self, update, context):
-        print_log(datetime.datetime.now())
-        print_log(f"error raised!: {context.error}")
+        print_log(f"{datetime.datetime.now()} error raised!: {context.error}")
         # traceback.format_exception is list of strings.
         tb_list = traceback.format_exception(
             None, context.error, context.error.__traceback__)
@@ -173,7 +174,7 @@ class BotHandler():
         formatted_for_telegram, formatted_for_logs = self.format_error(
             update_str, context, tb_string)
         print_log(
-            f"updating developer with error details: {formatted_for_logs}")
+            f"updating developer with error details:\n*****\n{formatted_for_logs}\n****\n")
         messages_list = [formatted_for_telegram[i:i+4000]
                          for i in range(0, len(formatted_for_telegram), 4000)]
         # Finally, send the message
@@ -237,33 +238,27 @@ class BotHandler():
             update.effective_chat.id, answer_message, disable_notification=True)
 
     async def send_to_enabled(self, message=None):
-        print_log("\tReceived signal...")
-        # reload configuration file, just to make sure (in case someone
-        # added a new chat and forgot to reload before the doorbell rang)
-        with open(PATHS.CONF_FILE) as f:
-            print_log(datetime.datetime.now())
-            print_log("\t\tReloading conf file...")
-            self.conf = json.load(f)
-            print_log("\t\tReloaded!")
-
-        enabled = {}
-        enabled = {key: value for
-                   (key, value) in self.conf.items() if value[ENABLED] == 1}
-        if message == None:
+        print_log(f"{datetime.datetime.now()}\tPicked up signal...")
+        async with self.lock: 
+            print_log(f"{datetime.datetime.now()}\tObtained lock..")
+            enabled = {}
+            enabled = {key: value for
+                       (key, value) in self.conf.items() if value[ENABLED] == 1}
             message = self.selectRing()
-        print(str(enabled))
-        if self.lastring + TIME_AVOID_RING < time.time():
-            print_log("\tSENDINGNOTIFICATION!!")
-            for chat in enabled.keys():
-                # send message and save to pending_alerts
-                print(f"\t\talerting chat {chat}, {enabled[chat]['name']}")
-                final_message = await self.application.bot.send_message(
-                    chat, message, reply_markup=InlineKeyboardMarkup(
-                        self.reply_to_ring))
-                self.pending_alerts.append(final_message)
-            self.lastring = time.time()
-        else:
-            print_log("\tToo little time since last notification")
+            print_log(f"\t\tenabled chats:{str(enabled)}")
+            print_log(f"{datetime.datetime.now()}\t\tVerifying...")
+            if self.lastring + TIME_AVOID_RING < time.time():
+                print_log("\tLast ring is old enough, alerting all chats...")
+                for chat in enabled.keys():
+                    # send message and save to pending_alerts
+                    print(f"\t\talerting chat {chat}, {enabled[chat]['name']}")
+                    final_message = await self.application.bot.send_message(
+                        chat, message, reply_markup=InlineKeyboardMarkup(
+                            self.reply_to_ring))
+                    self.pending_alerts.append(final_message)
+                self.lastring = time.time()
+            else:
+                print_log("\tToo little time since last notification")
 
     @check_enabled
     async def process_response(self, update, context):
@@ -338,6 +333,8 @@ class BotHandler():
         print_log("Sending start message...")
         await self.send_to_enabled(FIRST_RUN)
         print_log("\tSent start message.")
+        await context.bot.send_message(chat_id=DEVELOPER_CHAT_ID, text=f"Bot started. Since script start it's been {round(elapsed,3)} seconds.")
+        print_log("\tAdmin updated")
 
     def start(self):
         self.application.run_polling()
@@ -426,24 +423,51 @@ class mock():
 
 
 MAX_CONN_ATTEMPT = 50
-DELAY = 1
+DELAY = 3
+LONG_DELAY = 10
 
 if __name__ == '__main__':
-    if ENV_PROD:
-        handler = BotHandler(LED(PIN_OPEN), Button(PIN_RING))
-    else:
-        handler = BotHandler(mock(), mock())
-    # handler.send_to_enabled(FIRST_RUN)
-    print_log("Robobibi initialized. Start polling messages...")
+    start_execution = time.time()
+
+    attempt = 0
     for attempt in range(MAX_CONN_ATTEMPT):
         print_log(
             f"{datetime.datetime.now()}: attempt n.{attempt} of {MAX_CONN_ATTEMPT}")
         try:
+            if ENV_PROD:
+                # unfortunately can't start it outside the try/catch, i need the
+                # lock to be bound to this same event loop
+                open_pin = LED(PIN_OPEN)
+                ring_pin = Button(PIN_RING)
+                handler = BotHandler(open_pin, ring_pin)
+            else:
+                handler = BotHandler(mock(), mock())
+            print_log("Robobibi initialized. attempting to connect...")
+            elapsed = time.time() - start_execution
             handler.application.job_queue.run_once(handler.first_message, 0)
             handler.start()
+            # if loop ends with no exception, a KeyboardInterrupt was used
+            print_log("Assuming KeyboardInterrupt, exiting gracefully...")
+            break
+        except TimedOut as e:
+            print_log(f"No connection. Sleeping {LONG_DELAY} seconds to give time to local DNS server to spin up...")
+            time.sleep(LONG_DELAY)
         except Exception as e:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            print(f"type:{exc_type},value:{exc_value}")
             print_log(
-                f"attempt n.{attempt} failed with error {e}. Will try again in {DELAY} seconds...")
+                    f"attempt n.{attempt} failed with error {e}. Additional info:")
+            print_log("".join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+            print_log(f"Will try again in {DELAY} seconds...")
             time.sleep(DELAY)
-    print_log(
-        f"Tried {MAX_CONN_ATTEMPT} times, over {MAX_CONN_ATTEMPT * DELAY} seconds; never worked. Giving up :(")
+        finally:
+            print_log("\tRecreating asyncio event loop before next run...")
+            asyncio.set_event_loop(asyncio.new_event_loop())
+            print_log("\tCleaning up GPIO ports...")
+            if open_pin != None: open_pin.close()
+            if ring_pin != None: ring_pin.close()
+            print_log("\tReady for next run")
+    if attempt==MAX_CONN_ATTEMPT - 1:
+        print_log(f"Tried {MAX_CONN_ATTEMPT} times, over {MAX_CONN_ATTEMPT * DELAY} seconds; never worked. Giving up :(")
+    else:
+        print_log(f"Closing...\n\n")
