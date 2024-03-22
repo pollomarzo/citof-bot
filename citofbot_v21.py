@@ -16,7 +16,7 @@ from telegram.constants import ParseMode
 
 ENV_PROD = True
 
-
+MAX_LEN_TELEGRAM_MESSAGE = 3999
 PIN_OPEN = 4
 PIN_RING = 2
 # will call this pin even though the second one is gpio
@@ -170,6 +170,10 @@ class BotHandler():
             update_str, context, tb_string)
         print_log(
             f"updating developer with error details:\n*****\n{formatted_for_logs}\n****\n")
+        if len(formatted_for_telegram) > MAX_LEN_TELEGRAM_MESSAGE:
+            # then pick the version without tags, because sending a message without a closing
+            # tag makes telegram ANGRY
+            formatted_for_telegram = formatted_for_logs
         messages_list = [formatted_for_telegram[i:i+4000]
                          for i in range(0, len(formatted_for_telegram), 4000)]
         # Finally, send the message
@@ -397,16 +401,14 @@ class BotHandler():
     def format_error(self, update_str, context, tb_string):
         telegram_message = (
             "An exception was raised while handling an update\n"
-            f"<pre>update = {html.escape(json.dumps(update_str, indent=2, ensure_ascii=False))}"
-            "</pre>\n\n"
+            f"<pre>update = {html.escape(json.dumps(update_str, indent=2, ensure_ascii=False))}</pre>\n\n"
             f"<pre>context.chat_data = {html.escape(str(context.chat_data))}</pre>\n\n"
             f"<pre>context.user_data = {html.escape(str(context.user_data))}</pre>\n\n"
             f"<pre>{html.escape(tb_string)}</pre>"
         )
         log_message = (
             "An exception was raised while handling an update\n"
-            f"update = {json.dumps(update_str, indent=2, ensure_ascii=False)}"
-            "\n"
+            f"update = {json.dumps(update_str, indent=2, ensure_ascii=False)}\n"
             f"context.chat_data = {str(context.chat_data)}\n\n"
             f"context.user_data = {str(context.user_data)}\n\n"
             + tb_string
