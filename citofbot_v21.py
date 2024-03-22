@@ -1,23 +1,18 @@
+import os
 import sys
 import asyncio
-from telegram.ext import Application, CommandHandler
-import os
-from collections import namedtuple
-from telegram.error import (TelegramError, BadRequest,
-                            TimedOut, ChatMigrated, NetworkError)
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackQueryHandler
-from telegram.constants import ParseMode
-from gpiozero import Button
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, Update
-from gpiozero import Button
-from gpiozero import LED
 import json
 import datetime
 import random
 import time
-import telegram
 import traceback
 import html
+from gpiozero import (Button, LED)
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram.error import (TelegramError, BadRequest,
+                            TimedOut, ChatMigrated, NetworkError)
+from telegram.constants import ParseMode
 
 ENV_PROD = True
 
@@ -181,7 +176,11 @@ class BotHandler():
         try:
             for i in messages_list:
                 await context.bot.send_message(chat_id=DEVELOPER_CHAT_ID, text=i, parse_mode=ParseMode.HTML)
-        except:
+        except Exception as e:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            print(f"type:{exc_type},value:{exc_value}")
+            print_log("".join(traceback.format_exception(
+                exc_type, exc_value, exc_traceback)))
             print_log(
                 "updating developer failed... network must be down. very sad! will not retry")
         try:
@@ -215,31 +214,35 @@ class BotHandler():
 
     @check_enabled
     async def open_gate(self, update, context):
-        print_log(datetime.datetime.now())
-        print_log("\tReceived open request... Opening gate")
-        if self.lastopen + TIME_AVOID_OPEN < time.time():
-            print_log("opening gate...")
-            self.open_dev.on()
-            time.sleep(OPEN_TIME_SLEEP)
-            self.open_dev.off()
-            print_log("\tSignal sent. Is it open?")
-            self.lastopen = time.time()
-            answer_message = self.selectOpenedResponse()
-            for message in self.pending_alerts:
-                await self.application.bot.edit_message_text(
-                    "Gate was opened", message.chat_id, message.message_id)
-            self.pending_alerts.clear()
-        else:
+        print_log(
+            f"{datetime.datetime.now()}\tReceived request to open\n\t\tWaiting for lock...")
+        async with self.lock:
             print_log(
-                f"\tReceived 2 requests within {TIME_AVOID_OPEN} seconds; ignoring...")
-            answer_message = "It should still be open... relax"
+                f"{datetime.datetime.now()}\tAcquired lock, verifying last open time...")
+            if self.lastopen + TIME_AVOID_OPEN < time.time():
+                print_log("\t\tLast open time old enough, opening gate...")
+                self.open_dev.on()
+                time.sleep(OPEN_TIME_SLEEP)
+                self.open_dev.off()
+                print_log("\t\tSignal sent. Is it open?")
+                self.lastopen = time.time()
+                answer_message = self.selectOpenedResponse()
+                print_log("\tClearing pending alerts...")
+                for message in self.pending_alerts:
+                    await self.application.bot.edit_message_text(
+                        "Gate was opened", message.chat_id, message.message_id)
+                self.pending_alerts.clear()
+            else:
+                print_log(
+                    f"\t\tReceived 2 requests within {TIME_AVOID_OPEN} seconds; ignoring...")
+                answer_message = "It should still be open... relax"
 
-        await self.application.bot.send_message(
-            update.effective_chat.id, answer_message, disable_notification=True)
+            await self.application.bot.send_message(
+                update.effective_chat.id, answer_message, disable_notification=True)
 
     async def send_to_enabled(self, message=None):
         print_log(f"{datetime.datetime.now()}\tPicked up signal...")
-        async with self.lock: 
+        async with self.lock:
             print_log(f"{datetime.datetime.now()}\tObtained lock..")
             enabled = {}
             enabled = {key: value for
@@ -450,24 +453,29 @@ if __name__ == '__main__':
             print_log("Assuming KeyboardInterrupt, exiting gracefully...")
             break
         except TimedOut as e:
-            print_log(f"No connection. Sleeping {LONG_DELAY} seconds to give time to local DNS server to spin up...")
+            print_log(
+                f"No connection. Sleeping {LONG_DELAY} seconds to give time to local DNS server to spin up...")
             time.sleep(LONG_DELAY)
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
             print(f"type:{exc_type},value:{exc_value}")
             print_log(
-                    f"attempt n.{attempt} failed with error {e}. Additional info:")
-            print_log("".join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+                f"attempt n.{attempt} failed with error {e}. Additional info:")
+            print_log("".join(traceback.format_exception(
+                exc_type, exc_value, exc_traceback)))
             print_log(f"Will try again in {DELAY} seconds...")
             time.sleep(DELAY)
         finally:
             print_log("\tRecreating asyncio event loop before next run...")
             asyncio.set_event_loop(asyncio.new_event_loop())
             print_log("\tCleaning up GPIO ports...")
-            if open_pin != None: open_pin.close()
-            if ring_pin != None: ring_pin.close()
+            if open_pin != None:
+                open_pin.close()
+            if ring_pin != None:
+                ring_pin.close()
             print_log("\tReady for next run")
-    if attempt==MAX_CONN_ATTEMPT - 1:
-        print_log(f"Tried {MAX_CONN_ATTEMPT} times, over {MAX_CONN_ATTEMPT * DELAY} seconds; never worked. Giving up :(")
+    if attempt == MAX_CONN_ATTEMPT - 1:
+        print_log(
+            f"Tried {MAX_CONN_ATTEMPT} times, over {MAX_CONN_ATTEMPT * DELAY} seconds; never worked. Giving up :(")
     else:
         print_log(f"Closing...\n\n")
