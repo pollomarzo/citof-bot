@@ -240,8 +240,7 @@ class BotHandler():
         sent_message = await self.application.bot.send_message(
             update.effective_chat.id, answer_message, disable_notification=True)
         print_log(
-            f"Request handling complete. Response message id={
-                sent_message.message_id}, to {update.effective_chat.id}")
+            f"Request handling complete. Response message id={sent_message.message_id}, to {update.effective_chat.id}")
 
     async def send_to_enabled(self, message=None):
         print_log(f"{datetime.datetime.now()}\tPicked up signal...")
