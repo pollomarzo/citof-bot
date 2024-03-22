@@ -8,7 +8,7 @@ import time
 import traceback
 import html
 from gpiozero import (Button, LED)
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update, CallbackQuery, Message
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 from telegram.error import (TelegramError, BadRequest,
                             TimedOut, ChatMigrated, NetworkError)
@@ -123,11 +123,10 @@ class BotHandler():
             }
 
         print_log("---NEW SESSION---")
-        self.lock = asyncio.Lock()
         print_log(datetime.datetime.now())
         # all alerts sent but not answered. used when someone answer and
         # everyone else sees the notification disappear
-        self.pending_alerts = []
+        self.pending_alerts: list[Message] = []
         # last time notification went out
         self.lastring = 0
         self.lastopen = 0
@@ -135,7 +134,8 @@ class BotHandler():
         self.ring_dev = ring_dev
         self.reply_to_ring = [[InlineKeyboardButton("Apri", callback_data=OPEN),
                                InlineKeyboardButton("Ignora", callback_data=IGNORE)]]
-        self.application = Application.builder().token(TOKEN).build()
+        self.application = Application.builder().token(
+            TOKEN).concurrent_updates(False).build()
 
         self.application.add_handler(
             CommandHandler('addchat', self.add_to_conf))
@@ -160,6 +160,15 @@ class BotHandler():
 
     async def process_error(self, update, context):
         print_log(f"{datetime.datetime.now()} error raised!: {context.error}")
+
+        if isinstance(context.error, BadRequest) and "Message is not modified" in context.error.message:
+            # thrown many times by Telegram, when two or more CallbackRequests are fired for the same message:
+            # the first one successfully edits the message, while all the following ones try to edit it
+            # but without making any changes -> telegram gets angry. I don't need to be notified of every
+            # time it happens, and i don't want to pollute the logs too much
+            print_log("\tMessage was edited twice... whatever")
+            return
+
         # traceback.format_exception is list of strings.
         tb_list = traceback.format_exception(
             None, context.error, context.error.__traceback__)
@@ -168,6 +177,7 @@ class BotHandler():
         update_str = update.to_dict() if isinstance(update, Update) else str(update)
         formatted_for_telegram, formatted_for_logs = self.format_error(
             update_str, context, tb_string)
+
         print_log(
             f"updating developer with error details:\n*****\n{formatted_for_logs}\n****\n")
         if len(formatted_for_telegram) > MAX_LEN_TELEGRAM_MESSAGE:
@@ -182,14 +192,13 @@ class BotHandler():
                 await context.bot.send_message(chat_id=DEVELOPER_CHAT_ID, text=i, parse_mode=ParseMode.HTML)
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
-            print(f"type:{exc_type},value:{exc_value}")
             print_log("".join(traceback.format_exception(
                 exc_type, exc_value, exc_traceback)))
             print_log(
                 "updating developer failed... network must be down. very sad! will not retry")
         try:
             raise context.error
-        except BadRequest:
+        except BadRequest as e:
             # handle malformed requests - could be different things. no simple solution :/
             pass
         except TimedOut:
@@ -199,17 +208,6 @@ class BotHandler():
             # handle other connection problems. suuuure
             pass
         except ChatMigrated as e:
-            # this is not needed. there's currently a bug: telegram does not
-            # pass the old_chat_id, and the update currently being handled can
-            # be the /pingall sender, so screw this i'll just come and fix it
-            # myself if it happens
-            # old_chat_id = str(update.effective_chat.id)
-            # new_chat_id = str(e.new_chat_id)
-            # old_chat_name = self.conf[old_chat_id][NAME]
-            # self.removeChat(old_chat_id)
-            # self.conf[new_chat_id] = {NAME: old_chat_name, ENABLED: 1}
-            # self.update_file(PATHS.CONF_FILE, self.conf)
-            # # the chat_id of a group has changed, use e.new_chat_id instead
             pass
 
         except TelegramError:
@@ -217,69 +215,65 @@ class BotHandler():
             pass
 
     @check_enabled
-    async def open_gate(self, update, context):
+    async def open_gate(self, update: Update, context):
         print_log(
-            f"{datetime.datetime.now()}\tReceived request to open\n\t\tWaiting for lock...")
-        async with self.lock:
+            f"{datetime.datetime.now()}\tReceived request to open")
+        if self.lastopen + TIME_AVOID_OPEN < time.time():
+            print_log("\t\tLast open time old enough, OPENING GATE...")
+            self.open_dev.on()
+            time.sleep(OPEN_TIME_SLEEP)
+            self.open_dev.off()
+            print_log("\t\tSignal sent. Is it open?")
+            self.lastopen = time.time()
+            answer_message = self.selectOpenedResponse()
+            print_log("\tClearing pending alerts...")
+            for message in self.pending_alerts:
+                # check current content
+                await self.application.bot.edit_message_text(
+                    "Gate was opened", message.chat_id, message.message_id)
+            self.pending_alerts.clear()
+        else:
             print_log(
-                f"{datetime.datetime.now()}\tAcquired lock, verifying last open time...")
-            if self.lastopen + TIME_AVOID_OPEN < time.time():
-                print_log("\t\tLast open time old enough, opening gate...")
-                self.open_dev.on()
-                time.sleep(OPEN_TIME_SLEEP)
-                self.open_dev.off()
-                print_log("\t\tSignal sent. Is it open?")
-                self.lastopen = time.time()
-                answer_message = self.selectOpenedResponse()
-                print_log("\tClearing pending alerts...")
-                for message in self.pending_alerts:
-                    await self.application.bot.edit_message_text(
-                        "Gate was opened", message.chat_id, message.message_id)
-                self.pending_alerts.clear()
-            else:
-                print_log(
-                    f"\t\tReceived 2 requests within {TIME_AVOID_OPEN} seconds; ignoring...")
-                answer_message = "It should still be open... relax"
+                f"\t\tReceived 2 requests within {TIME_AVOID_OPEN} seconds; ignoring...")
+            answer_message = "It should still be open... relax"
 
-            await self.application.bot.send_message(
-                update.effective_chat.id, answer_message, disable_notification=True)
+        sent_message = await self.application.bot.send_message(
+            update.effective_chat.id, answer_message, disable_notification=True)
+        print_log(
+            f"Request handling complete. Response message id={
+                sent_message.message_id}, to {update.effective_chat.id}")
 
     async def send_to_enabled(self, message=None):
         print_log(f"{datetime.datetime.now()}\tPicked up signal...")
-        async with self.lock:
-            print_log(f"{datetime.datetime.now()}\tObtained lock..")
-            enabled = {}
-            enabled = {key: value for
-                       (key, value) in self.conf.items() if value[ENABLED] == 1}
-            message = self.selectRing()
-            print_log(f"\t\tenabled chats:{str(enabled)}")
-            print_log(f"{datetime.datetime.now()}\t\tVerifying...")
-            if self.lastring + TIME_AVOID_RING < time.time():
-                print_log("\tLast ring is old enough, alerting all chats...")
-                for chat in enabled.keys():
-                    # send message and save to pending_alerts
-                    print(f"\t\talerting chat {chat}, {enabled[chat]['name']}")
-                    final_message = await self.application.bot.send_message(
-                        chat, message, reply_markup=InlineKeyboardMarkup(
-                            self.reply_to_ring))
-                    self.pending_alerts.append(final_message)
-                self.lastring = time.time()
-            else:
-                print_log("\tToo little time since last notification")
+        enabled = {}
+        enabled = {key: value for
+                   (key, value) in self.conf.items() if value[ENABLED] == 1}
+        message = self.selectRing()
+        print_log(f"\t\tenabled chats:{str(enabled)}")
+        print_log(f"{datetime.datetime.now()}\t\tVerifying...")
+        if self.lastring + TIME_AVOID_RING < time.time():
+            print_log("\tLast ring is old enough, alerting all chats...")
+            for chat in enabled.keys():
+                # send message and save to pending_alerts
+                final_message = await self.application.bot.send_message(
+                    chat, message, reply_markup=InlineKeyboardMarkup(
+                        self.reply_to_ring))
+                self.pending_alerts.append(final_message)
+            self.lastring = time.time()
+        else:
+            print_log("\tToo little time since last notification")
 
     @check_enabled
     async def process_response(self, update, context):
         query = update.callback_query
-        print_log(datetime.datetime.now())
-        print_log("Received response...")
-        if query.data == OPEN:
-            print_log("Request approved! Opening..")
-            await self.open_gate(update, context)
-
-        else:
-            print_log("\tRequest ignored")
-
+        print_log(f"{datetime.datetime.now()}\tReceived callback query...")
         await self.clean_query_remove_markup(update.callback_query)
+
+        if query.data == OPEN:
+            print_log("\t\t... to open the gate...")
+            await self.open_gate(update, context)
+        else:
+            print_log("\t\t... to ignore. Ignored.")
 
     ###################### OTHER DIRECT COMMANDS HANDLERS ###########################################
 
@@ -331,7 +325,7 @@ class BotHandler():
 
     @check_enabled
     async def ping_all(self, update: Update, context):
-        print(
+        print_log(
             f"pinging all because of message from {update.effective_chat.id}, {update.effective_chat.full_name}")
         await self.send_to_enabled(message='PING!')
         await update.message.reply_text("did you get pinged?")
@@ -392,11 +386,16 @@ class BotHandler():
             json.dump(obj, f, indent=4)
             print_log("\t\tSaved!")
 
-    async def clean_query_remove_markup(self, query):
+    async def clean_query_remove_markup(self, query: CallbackQuery):
         if (query != None):
             await query.answer()
             await query.edit_message_text(
                 text="Selected option: {}".format(query.data))
+            # remove it from pending, it's been handled
+            for message in self.pending_alerts:
+                if message.message_id == query.message.message_id:
+                    self.pending_alerts.remove(message)
+                    break
 
     def format_error(self, update_str, context, tb_string):
         telegram_message = (
@@ -460,7 +459,6 @@ if __name__ == '__main__':
             time.sleep(LONG_DELAY)
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
-            print(f"type:{exc_type},value:{exc_value}")
             print_log(
                 f"attempt n.{attempt} failed with error {e}. Additional info:")
             print_log("".join(traceback.format_exception(
