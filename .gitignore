@@ -1,7 +1,8 @@
-tokens.json
+tokens*
 __pycache__
 config.json
 responses.json
 trash.txt
 log.txt
 .vscode
+pid
