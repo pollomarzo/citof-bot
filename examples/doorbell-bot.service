@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram Doorbell Bot
+Requires=network-online.target
+After=network-online.target
+# retry for 240 times, every 30 seconds = ~2 hours
+StartLimitBurst=240
+StartLimitIntervalSec=infinity
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/bot/citof-bot/citofbot_v21.py
+WorkingDirectory=/home/pi/bot/citof-bot
+Restart=always
+RestartSec=30
+User=pi
+
+[Install]
+WantedBy=multi-user.target
