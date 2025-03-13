@@ -1,19 +1,37 @@
-import os
-import sys
 import asyncio
-import json
 import datetime
+import html
+import json
+import os
 import random
+import signal
+import sys
 import time
 import traceback
-import html
-import signal
-from gpiozero import (Button, LED)
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update, CallbackQuery, Message
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, CallbackContext
-from telegram.error import (TelegramError, BadRequest,
-                            TimedOut, ChatMigrated, NetworkError)
+
+from gpiozero import LED, Button
+from telegram import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+)
 from telegram.constants import ParseMode
+from telegram.error import (
+    BadRequest,
+    ChatMigrated,
+    NetworkError,
+    TelegramError,
+    TimedOut,
+)
+from telegram.ext import (
+    Application,
+    CallbackContext,
+    CallbackQueryHandler,
+    CommandHandler,
+)
+
 from utils import write_current_pid_in_file
 
 ENV_PROD = False
@@ -31,11 +49,11 @@ CURRENT_DIR = os.path.dirname(__file__)
 
 
 class PATHS:
-    TOKEN_FILE = './tokens.json'
-    CONF_FILE = './config.json'
-    LOG_FILE = './log.txt'
-    DEL_FILE = './trash.txt'
-    RESPONSE_FILE = './responses.json'
+    TOKEN_FILE = "./tokens.json"
+    CONF_FILE = "./config.json"
+    LOG_FILE = "./log.txt"
+    DEL_FILE = "./trash.txt"
+    RESPONSE_FILE = "./responses.json"
 
 
 with open(PATHS.TOKEN_FILE) as f:
@@ -45,9 +63,9 @@ with open(PATHS.TOKEN_FILE) as f:
 
 # responses and stuff
 FIRST_RUN = "Yo! Just woke up. Do you need something?"
-RING_PREFIX = '[cancello]'
+RING_PREFIX = "[cancello]"
 DEFAULT_RING_NOTIFICATION = "SOMEONE'S AT THE DOOR! IS IT THE COPS? GO CHECK!"
-OPEN_PREFIX = '[apro]'
+OPEN_PREFIX = "[apro]"
 DEFAULT_OPEN_NOTIFICATION = "WHO LET THE DOGS IN! WHO! WHO! whowho!"
 # bad name, time to avoid re-ringing due to multiple signals
 TIME_AVOID_RING = 15
@@ -56,26 +74,26 @@ OPEN_TIME_SLEEP = 0.3
 
 
 # responses for callback
-RING = 'ring_notifications'
-OPEN = 'open_notifications'
-IGNORE = 'ignore'
+RING = "ring_notifications"
+OPEN = "open_notifications"
+IGNORE = "ignore"
 
-CONFIRM = 'confirm'
-QUIT = 'quit'
+CONFIRM = "confirm"
+QUIT = "quit"
 
 # per-convo attributes
-LOCATION = 'location'
-ACTION = 'action'
-PAGE = 'page'
-INDEX_TO_RESPONSE = 'indexToResponse'
-RESPONSE_TO_INDEX = 'responseToIndex'
-MAX_RESPONSE_SENT = 'maxResponseSent'
-LAST_KNOWN_STATE = 'lastKnownState'
-WARN_RESPONSE = 'warnResponse'
+LOCATION = "location"
+ACTION = "action"
+PAGE = "page"
+INDEX_TO_RESPONSE = "indexToResponse"
+RESPONSE_TO_INDEX = "responseToIndex"
+MAX_RESPONSE_SENT = "maxResponseSent"
+LAST_KNOWN_STATE = "lastKnownState"
+WARN_RESPONSE = "warnResponse"
 
 # json fields. might move to pandas dataframe but REALLY not worth the effort
-ENABLED = 'enabled'
-NAME = 'name'
+ENABLED = "enabled"
+NAME = "name"
 
 
 def print_log(message: str, level: int = 0, tag: str | int = None):
@@ -90,10 +108,10 @@ def print_log(message: str, level: int = 0, tag: str | int = None):
         elif isinstance(tag, str):
             chat_name = tag
         message = f"[{chat_name}] {message}"
-    message = str(datetime.datetime.now()) + ' ' + '\t'*level + message
+    message = str(datetime.datetime.now()) + " " + "\t" * level + message
     print(message)
-    with open(PATHS.LOG_FILE, 'a+') as f:
-        f.write(str(message) + '\n')
+    with open(PATHS.LOG_FILE, "a+") as f:
+        f.write(str(message) + "\n")
 
 
 def save_state_factory(state):
@@ -102,7 +120,9 @@ def save_state_factory(state):
             context.user_data[LAST_KNOWN_STATE] = state
             print_log(f"saving last state {state}")
             return func(self, update, context)
+
         return inner
+
     return save_state_wrap
 
 
@@ -116,11 +136,13 @@ def check_enabled(func):
             message = f"received unauthorized request from {src}({src_name})"
             print_log(message)
             await context.bot.send_message(
-                chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.HTML)
+                chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.HTML
+            )
+
     return inner
 
 
-class BotHandler():
+class BotHandler:
     def __init__(self, open_dev, ring_dev, alwaysupdate=True):
         try:
             f = open(PATHS.CONF_FILE)
@@ -136,7 +158,7 @@ class BotHandler():
         except:
             self.responses = {
                 RING: [DEFAULT_RING_NOTIFICATION],
-                OPEN: [DEFAULT_OPEN_NOTIFICATION]
+                OPEN: [DEFAULT_OPEN_NOTIFICATION],
             }
 
         print_log("---NEW SESSION---")
@@ -148,37 +170,46 @@ class BotHandler():
         self.lastopen = 0
         self.open_dev = open_dev
         self.ring_dev = ring_dev
-        self.reply_to_ring = [[InlineKeyboardButton("Apri", callback_data=OPEN),
-                               InlineKeyboardButton("Ignora", callback_data=IGNORE)]]
-        self.application = Application.builder().token(
-            TOKEN).read_timeout(30).write_timeout(30).build()
+        self.reply_to_ring = [
+            [
+                InlineKeyboardButton("Apri", callback_data=OPEN),
+                InlineKeyboardButton("Ignora", callback_data=IGNORE),
+            ]
+        ]
+        self.application = (
+            Application.builder()
+            .token(TOKEN)
+            .read_timeout(30)
+            .write_timeout(30)
+            .build()
+        )
         self.lock = asyncio.Lock()
 
+        self.application.add_handler(CommandHandler("addchat", self.add_to_conf))
         self.application.add_handler(
-            CommandHandler('addchat', self.add_to_conf))
-        self.application.add_handler(
-            CommandHandler('removechat', self.remove_from_conf))
-        self.application.add_handler(
-            CommandHandler('reload', self.reload_settings))
-        self.application.add_handler(
-            CommandHandler('pingall', self.ping_all))
+            CommandHandler("removechat", self.remove_from_conf)
+        )
+        self.application.add_handler(CommandHandler("reload", self.reload_settings))
+        self.application.add_handler(CommandHandler("pingall", self.ping_all))
 
-        self.application.add_handler(
-            CommandHandler('open_gate', self.open_gate))
-        self.application.add_handler(
-            CallbackQueryHandler(self.process_response))
+        self.application.add_handler(CommandHandler("open_gate", self.open_gate))
+        self.application.add_handler(CallbackQueryHandler(self.process_response))
         self.application.add_error_handler(self.process_error)
 
         # set notification on signal received
         self.ring_dev.when_pressed = lambda: self.application.job_queue.run_once(
-            self.handle_ring, 0)
+            self.handle_ring, 0
+        )
 
         self.alwaysupdate = alwaysupdate
 
     async def process_error(self, update: Update, context: CallbackContext):
         print_log(f"error raised!: {context.error}")
 
-        if isinstance(context.error, BadRequest) and "Message is not modified" in context.error.message:
+        if (
+            isinstance(context.error, BadRequest)
+            and "Message is not modified" in context.error.message
+        ):
             # thrown many times by Telegram, when two or more CallbackRequests are fired for the same message:
             # the first one successfully edits the message, while all the following ones try to edit it
             # but without making any changes -> telegram gets angry. I don't need to be notified of every
@@ -188,31 +219,40 @@ class BotHandler():
 
         # traceback.format_exception is list of strings.
         tb_list = traceback.format_exception(
-            None, context.error, context.error.__traceback__)
+            None, context.error, context.error.__traceback__
+        )
         tb_string = "".join(tb_list)
         # Build the message with some markup and additional information about what happened.
         update_str = update.to_dict() if isinstance(update, Update) else str(update)
         formatted_for_telegram, formatted_for_logs = self.format_error(
-            update_str, context, tb_string)
+            update_str, context, tb_string
+        )
 
         print_log(
-            f"updating developer with error details:\n*****\n{formatted_for_logs}\n****\n")
+            f"updating developer with error details:\n*****\n{formatted_for_logs}\n****\n"
+        )
         if len(formatted_for_telegram) > MAX_LEN_TELEGRAM_MESSAGE:
             # then pick the version without tags, because sending a message without a closing
             # tag makes telegram ANGRY
             formatted_for_telegram = formatted_for_logs
-        messages_list = [formatted_for_telegram[i:i+4000]
-                         for i in range(0, len(formatted_for_telegram), 4000)]
+        messages_list = [
+            formatted_for_telegram[i : i + 4000]
+            for i in range(0, len(formatted_for_telegram), 4000)
+        ]
         # Finally, send the message
         try:
             for i in messages_list:
-                await context.bot.send_message(chat_id=DEVELOPER_CHAT_ID, text=i, parse_mode=ParseMode.HTML)
+                await context.bot.send_message(
+                    chat_id=DEVELOPER_CHAT_ID, text=i, parse_mode=ParseMode.HTML
+                )
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
-            print_log("".join(traceback.format_exception(
-                exc_type, exc_value, exc_traceback)))
             print_log(
-                "updating developer failed... network must be down. very sad! will not retry")
+                "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+            )
+            print_log(
+                "updating developer failed... network must be down. very sad! will not retry"
+            )
         try:
             raise context.error
         except BadRequest as e:
@@ -246,27 +286,32 @@ class BotHandler():
             for message in self.pending_alerts:
                 # check current content
                 await self.application.bot.edit_message_text(
-                    "Gate was opened", message.chat_id, message.message_id)
+                    "Gate was opened", message.chat_id, message.message_id
+                )
             self.pending_alerts.clear()
         else:
             print_log(
-                f"Received 2 requests within {TIME_AVOID_OPEN} seconds; ignoring...", 2)
+                f"Received 2 requests within {TIME_AVOID_OPEN} seconds; ignoring...", 2
+            )
             answer_message = "It should still be open... relax"
 
         sent_message = await self.application.bot.send_message(
-            update.effective_chat.id, answer_message, disable_notification=True)
+            update.effective_chat.id, answer_message, disable_notification=True
+        )
         print_log(
-            f"Request handling complete. Response message id={sent_message.message_id}, to {update.effective_chat.id}\n\n", 1, update)
+            f"Request handling complete. Response message id={sent_message.message_id}, to {update.effective_chat.id}\n\n",
+            1,
+            update,
+        )
 
     async def handle_ring(self, context: CallbackContext):
         # when the doorbell rings, the bot receives many, many requests. to be able to
         # distinguish their handling, i create a random int for each, to be attached to
         # all subsequent logs related to this request
         tag = str(random.randint(1, 100000))
-        print_log(
-            f"Picked up signal, waiting for lock...", 1, tag)
+        print_log(f"Picked up signal, waiting for lock...", 1, tag)
         async with self.lock:
-            print_log("Lock acquired!...", 2,  tag)
+            print_log("Lock acquired!...", 2, tag)
             print_log("Verifying...", 2, tag)
             if self.lastring + TIME_AVOID_RING < time.time():
                 print_log("Last ring is old enough, alerting all chats...", 2)
@@ -278,15 +323,16 @@ class BotHandler():
 
     async def send_to_enabled(self, message=None):
         enabled = {}
-        enabled = {key: value for
-                   (key, value) in self.conf.items() if value[ENABLED] == 1}
+        enabled = {
+            key: value for (key, value) in self.conf.items() if value[ENABLED] == 1
+        }
         message = message or f"{self.selectRing()}"
         print_log(f"ALERTING enabled chats:{str(enabled)}", 2)
         for chat in enabled.keys():
             # send message and save to pending_alerts
             final_message = await self.application.bot.send_message(
-                chat, message, reply_markup=InlineKeyboardMarkup(
-                    self.reply_to_ring))
+                chat, message, reply_markup=InlineKeyboardMarkup(self.reply_to_ring)
+            )
             self.pending_alerts.append(final_message)
 
     @check_enabled
@@ -306,22 +352,22 @@ class BotHandler():
     async def add_to_conf(self, update, context):
         print_log("Adding new chat..", 1)
         name = update.effective_chat.title or update.effective_chat.username
-        added = self.addChat(update.effective_chat.id,
-                             name)
+        added = self.addChat(update.effective_chat.id, name)
         print_log("Done!", 1)
         if self.alwaysupdate and added:
             self.update_file(PATHS.CONF_FILE, self.conf)
         if added:
             await update.message.reply_text(
-                "added your chat. it'll have to be verified by a moderator before you're clear!")
+                "added your chat. it'll have to be verified by a moderator before you're clear!"
+            )
         else:
-            await update.message.reply_text(
-                "I already added your chat")
+            await update.message.reply_text("I already added your chat")
 
     async def remove_from_conf(self, update, context):
         if self.conf is {}:
             await update.message.reply_text(
-                "i'm not sending updates to anyone right now...")
+                "i'm not sending updates to anyone right now..."
+            )
             print_log("No keys in dict")
             return
         print_log("Removing chat...", 1)
@@ -330,10 +376,12 @@ class BotHandler():
         if update.message is not None:
             if removed:
                 await update.message.reply_text(
-                    "removed this chat! you'll no longer receive notifications from me")
+                    "removed this chat! you'll no longer receive notifications from me"
+                )
             else:
                 await update.message.reply_text(
-                    "chat not found. are you sure you know what you're doing?")
+                    "chat not found. are you sure you know what you're doing?"
+                )
 
     async def reload_settings(self, update, context):
         print_log("Received reload request")
@@ -348,15 +396,19 @@ class BotHandler():
     @check_enabled
     async def ping_all(self, update: Update, context):
         print_log(
-            f"pinging all because of message from {update.effective_chat.id}, {update.effective_chat.full_name}")
-        await self.send_to_enabled(message='PING!')
+            f"pinging all because of message from {update.effective_chat.id}, {update.effective_chat.full_name}"
+        )
+        await self.send_to_enabled(message="PING!")
         await update.message.reply_text("did you get pinged?")
 
     async def first_message(self, context):
         print_log("Sending start message...")
         await self.send_to_enabled(FIRST_RUN)
         print_log("Sent start message.", 1)
-        await context.bot.send_message(chat_id=DEVELOPER_CHAT_ID, text=f"Bot started. Since script start it's been {round(elapsed,3)} seconds.")
+        await context.bot.send_message(
+            chat_id=DEVELOPER_CHAT_ID,
+            text=f"Bot started. Since script start it's been {round(elapsed,3)} seconds.",
+        )
         print_log("Admin updated", 1)
 
     def start(self):
@@ -402,17 +454,16 @@ class BotHandler():
             return RING_PREFIX + DEFAULT_RING_NOTIFICATION
 
     def update_file(self, file, obj):
-        with open(file, 'w') as f:
+        with open(file, "w") as f:
             print_log("Saving to file..", 2)
             # consider sort_keys=True
             json.dump(obj, f, indent=4)
             print_log("Saved!", 2)
 
     async def clean_query_remove_markup(self, query: CallbackQuery):
-        if (query != None):
+        if query != None:
             await query.answer()
-            await query.edit_message_text(
-                text="Selected option: {}".format(query.data))
+            await query.edit_message_text(text="Selected option: {}".format(query.data))
             # remove it from pending, it's been handled
             for message in self.pending_alerts:
                 if message.message_id == query.message.message_id:
@@ -431,13 +482,12 @@ class BotHandler():
             "An exception was raised while handling an update\n"
             f"update = {json.dumps(update_str, indent=2, ensure_ascii=False)}\n"
             f"context.chat_data = {str(context.chat_data)}\n\n"
-            f"context.user_data = {str(context.user_data)}\n\n"
-            + tb_string
+            f"context.user_data = {str(context.user_data)}\n\n" + tb_string
         )
         return telegram_message, log_message
 
 
-class mock():
+class mock:
     def __init__(self):
         self.when_pressed = None
 
@@ -447,10 +497,6 @@ class mock():
     def off(self):
         print("[MOCK GATE]turning off...")
 
-
-MAX_CONN_ATTEMPT = 50
-DELAY = 3
-LONG_DELAY = 10
 
 if __name__ == "__main__":
     start_execution = time.time()
