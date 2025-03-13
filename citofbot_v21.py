@@ -452,55 +452,31 @@ MAX_CONN_ATTEMPT = 50
 DELAY = 3
 LONG_DELAY = 10
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     start_execution = time.time()
-
-    attempt = 0
-    for attempt in range(MAX_CONN_ATTEMPT):
-        print_log(
-            f"{datetime.datetime.now()}: attempt n.{attempt} of {MAX_CONN_ATTEMPT}")
-        try:
-            if ENV_PROD:
-                # unfortunately can't start it outside the try/catch, i need the
-                # lock to be bound to this same event loop
-                open_pin = LED(PIN_OPEN)
-                ring_pin = Button(PIN_RING)
-                handler = BotHandler(open_pin, ring_pin)
-            else:
-                handler = BotHandler(mock(), mock())
-                signal.signal(signal.SIGUSR1, lambda signum, n: handler.application.job_queue.run_once(
-                    handler.handle_ring, 0))
-            print_log("Robobibi initialized. attempting to connect...")
-            elapsed = time.time() - start_execution
-            handler.application.job_queue.run_once(handler.first_message, 0)
-            handler.start()
-            # if loop ends with no exception, a KeyboardInterrupt was used
-            print_log("Assuming KeyboardInterrupt, exiting gracefully...")
-            break
-        except TimedOut as e:
-            print_log(
-                f"No connection. Sleeping {LONG_DELAY} seconds to give time to local DNS server to spin up...")
-            time.sleep(LONG_DELAY)
-        except Exception as e:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            print_log(
-                f"attempt n.{attempt} failed with error {e}. Additional info:")
-            print_log("".join(traceback.format_exception(
-                exc_type, exc_value, exc_traceback)))
-            print_log(f"Will try again in {DELAY} seconds...")
-            time.sleep(DELAY)
-        finally:
-            print_log("Recreating asyncio event loop before next run...", 1)
-            asyncio.set_event_loop(asyncio.new_event_loop())
-            if ENV_PROD:
-                print_log("Cleaning up GPIO ports...", 1)
-                if open_pin != None:
-                    open_pin.close()
-                if ring_pin != None:
-                    ring_pin.close()
-            print_log("Ready for next run", 1)
-    if attempt == MAX_CONN_ATTEMPT - 1:
-        print_log(
-            f"Tried {MAX_CONN_ATTEMPT} times, over {MAX_CONN_ATTEMPT * DELAY} seconds; never worked. Giving up :(")
+    if ENV_PROD:
+        # unfortunately can't start it outside the try/catch, i need the
+        # lock to be bound to this same event loop
+        open_pin = LED(PIN_OPEN)
+        ring_pin = Button(PIN_RING)
+        handler = BotHandler(open_pin, ring_pin)
     else:
-        print_log(f"Closing...\n\n")
+        handler = BotHandler(mock(), mock())
+        signal.signal(
+            signal.SIGUSR1,
+            lambda signum, n: handler.application.job_queue.run_once(
+                handler.handle_ring, 0
+            ),
+        )
+    print_log("Robobibi initialized. attempting to connect...")
+    elapsed = time.time() - start_execution
+    handler.application.job_queue.run_once(handler.first_message, 0)
+    handler.start()
+    # if loop ends with no exception, a KeyboardInterrupt was used
+    print_log("Assuming KeyboardInterrupt, exiting gracefully...")
+    if ENV_PROD:
+        print_log("Cleaning up GPIO ports...", 1)
+        if open_pin != None:
+            open_pin.close()
+        if ring_pin != None:
+            ring_pin.close()
